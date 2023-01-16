@@ -3,6 +3,22 @@ lithium = require 'lithium.init'
 import string, table, lexer, io, util from lithium
 import unpack from table
 
+splitIP = (ip) ->
+	i, modname = ip\match '^(%d+):(.*)$'
+	i = tonumber i if i
+	@blame "corrupted address" unless i
+	return i, modname
+
+getLocation = (context, ip) ->
+	i, modname = splitIP ip
+	module = context.modules[modname]
+	line, col = string.positionAt module.source, module.tokens[i].start
+	return module.filename, line, col, module.tokens[i]
+
+getLocationString = (context, ip) ->
+	filename, line, col, token = getLocation context, ip
+	"#{filename}:#{line}:#{col}", token.value
+
 blameNoone = (message) ->
 	io.stderr\write "error: #{message}\n"
 	os.exit 1
@@ -21,6 +37,19 @@ blameTokenInModule = (module, token, message) ->
 		token = module.tokens[token]
 	-- NOTE: we don't check if token is within the module.tokens
 	blameByteInModule module, token.start, message
+
+blameState = (state, message) ->
+	io.stderr\write "#{getLocationString state.context, state.ip}: error: #{message}\n"
+	fslen = #state.functionStack
+	to = math.max 1, fslen - 5 + 1
+	for i = fslen, to, -1
+		if i == to
+			io.stderr\write '    ...\n' if i > 1
+			i = 1
+		ip = state.functionStack[i]
+		location, token = getLocationString state.context, ip
+		io.stderr\write "    at #{location} in #{token}\n"
+	os.exit 1
 
 loadFile = (filename, context, modname = '') ->
 	source, err = io.readBytes filename
@@ -94,24 +123,16 @@ runContext = (context) ->
 		functionStack: {}
 		
 		nextIP: =>
-			i, modname = @splitIP @ip
+			i, modname = splitIP @ip
 			@ip = "#{i + 1}:#{modname}"
-		splitIP: (ip = @ip) =>
-			i, modname = ip\match '^(%d+):(.*)$'
-			i = tonumber i if i
-			@blame "corrupted address" unless i
-			return i, modname
 		getToken: (ip = @ip) =>
-			i, modname = @splitIP ip
+			i, modname = splitIP ip
 			module = context.modules[modname]
 			assert module, "module '#{modname}' does not exist in the context"
 			token = module.tokens[i]
 			assert token, "token #{i} in module '#{modname}' does not exist"
 			return token
-		blame: (message) =>
-			i, modname = @splitIP @ip
-			module = @context.modules[modname]
-			blameTokenInModule module, i, message
+		blame: (message) => blameState @, message
 		popn: (n) =>
 			@blame "expected at least #{n} values on the stack, got #{#@stack}" if #@stack < n
 			values = {}
