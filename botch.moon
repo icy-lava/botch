@@ -70,6 +70,7 @@ state = {
 	stack: {}
 	functionStack: {}
 	
+	blameToken: (message) => blameToken @tokens[@ip], message
 	popn: (n) =>
 		blameToken @tokens[@ip], "expected at least #{n} values on the stack, got #{#@stack}" if #@stack < n
 		values = {}
@@ -77,17 +78,22 @@ state = {
 			values[i] = @pop!
 		values
 	pop: =>
-		blameToken @tokens[@ip], "expected a value on the stack, got none" if #@stack < 1
+		@blameToken "expected a value on the stack, got none" if #@stack < 1
 		value = @stack[#@stack]
 		@stack[#@stack] = nil
 		value
 	popnum: =>
 		value = @pop!
 		value = tonumber value
-		blameToken @tokens[@ip], 'expected a number as argument' unless value
+		@blameToken 'expected a number as argument' unless value
 		value
 	popbool: => @pop! != '0'
 	push: (value) =>
+		switch type value
+			when 'boolean'
+				value = value and '1' or '0'
+			when 'nil', 'table'
+				error "atempted to push a #{type value} value onto the stack", 2
 		table.insert @stack, tostring value
 	call: (ip) =>
 		blameToken @tokens[@ip], 'function stack overflow' if #@functionStack >= 1024
@@ -180,12 +186,33 @@ with state
 						when '*'
 							b, a = \popnum!, \popnum!
 							\push a * b
+						when '**'
+							b, a = \popnum!, \popnum!
+							\push math.pow a, b
+						when '/'
+							b, a = \popnum!, \popnum!
+							\push a / b
+						when '//'
+							b, a = \popnum!, \popnum!
+							\push math.floor a / b
+						when '%'
+							b, a = \popnum!, \popnum!
+							\push a % b
 						when '++'
 							\push \popnum! + 1
 						when '--'
 							\push \popnum! - 1
+						when 'or'
+							b, a = \popbool!, \popbool!
+							\push a or b
+						when 'and'
+							b, a = \popbool!, \popbool!
+							\push a and b
+						when 'xor'
+							b, a = \popbool!, \popbool!
+							\push (a or b) and not (a and b)
 						when 'not'
-							\push \popbool! and '0' or '1'
+							\push not \popbool!
 						when 'call'
 							\call \popnum!
 						when 'address'
