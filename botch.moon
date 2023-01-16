@@ -301,6 +301,10 @@ runContext = (context) ->
 			\nextIP!
 	return state.stack
 
-context, err = loadFile 'test.bot'
+unless arg[1]
+	io.stderr\write "usage: #{arg[0]} <source>\n"
+	return
+
+context, err = loadFile arg[1]
 blameNoone err unless context
 runContext context

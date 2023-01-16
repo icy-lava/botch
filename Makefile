@@ -1,3 +1,3 @@
 .PHONY: run
 run:
-	moon botch.moon
+	moon botch.moon example/hello.bot
