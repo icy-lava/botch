@@ -3,118 +3,152 @@ lithium = require 'lithium.init'
 import string, table, lexer, io, util from lithium
 import unpack from table
 
-filename = 'test.bot'
-str = io.readBytes filename
-
-blameByte = (i, message) ->
-	line, col = string.positionAt str, i
-	if line
-		io.stderr\write "#{filename}:#{line}:#{col}: error: #{message}\n"
-	else
-		io.stderr\write "#{filename}:byte #{i}: error: #{message}\n"
+blameNoone = (message) ->
+	io.stderr\write "error: #{message}\n"
 	os.exit 1
 
-blameToken = (token, message) -> blameByte token.start, message
+blameModule = (module, message) ->
+	io.stderr\write "#{module.filename}: error: #{message}\n"
+	os.exit 1
 
-tokens, _, errByte = lexer.lex str, {
-	{'whitespace', '%s+'}
-	{'literal', '"([^"]*)"', "'([^']*)'", '%d+'}
-	{'import', ':([%w%-_/%.]+)'}
-	{'label', '([%w%-_]+):'}
-	{'address', '@([%w%-_]+)'}
-	{'comment', '#[^\n]*'}
-	{'identifier', '[^%c%s@:]+'}
-}
+blameByteInModule = (module, i, message) ->
+	line, col = string.positionAt module.source, i
+	io.stderr\write "#{module.filename}:#{line}:#{col}: error: #{message}\n"
+	os.exit 1
 
-blameByte errByte, 'unrecognized token' unless tokens
+blameTokenInModule = (module, token, message) ->
+	if 'number' == type token
+		token = module.tokens[token]
+	-- NOTE: we don't check if token is within the module.tokens
+	blameByteInModule module, token.start, message
 
-tokens = table.ireject tokens, (token) ->
-	token.type == 'whitespace' or token.type == 'comment'
-
-tokens = table.map tokens, (token) ->
-	token.value = token.captures[1] or token.captures[0]
-	token.captures = nil
-	token
-
-table.insert tokens, {
-	start: #str + 1,
-	stop: #str + 1,
-	type: 'label',
-	value: 'exit'
-}
-
-labels = {}
-
--- Find the index of each label token
-for i, token in ipairs tokens
-	if token.type == 'label'
-		blameToken token, 'label redefinition' if labels[token.value]
-		labels[token.value] = i
-
-blameByte 1, "start label not found" unless labels.start
-
--- Check for invalid addressing and convert to literal
-for i, token in ipairs tokens
-	if token.type == 'address'
-		blameToken token, 'no such label exists' unless labels[token.value]
-		token.type = 'literal'
-		token.value = labels[token.value]
-
--- Execute tokens
-
-state = {
-	:tokens
-	:labels
-	tokenCount: #tokens
-	ip: labels.start + 1
-	stack: {}
-	functionStack: {}
+loadFile = (filename, context, modname = '') ->
+	source, err = io.readBytes filename
+	return nil, err unless source
 	
-	blameToken: (message) => blameToken @tokens[@ip], message
-	popn: (n) =>
-		blameToken @tokens[@ip], "expected at least #{n} values on the stack, got #{#@stack}" if #@stack < n
-		values = {}
-		for i = n, 1, -1
-			values[i] = @pop!
-		values
-	pop: =>
-		@blameToken "expected a value on the stack, got none" if #@stack < 1
-		value = @stack[#@stack]
-		@stack[#@stack] = nil
-		value
-	popnum: =>
-		value = @pop!
-		value = tonumber value
-		@blameToken 'expected a number as argument' unless value
-		value
-	popbool: => @pop! != '0'
-	push: (value) =>
-		switch type value
-			when 'boolean'
-				value = value and '1' or '0'
-			when 'nil', 'table'
-				error "atempted to push a #{type value} value onto the stack", 2
-		table.insert @stack, tostring value
-	call: (ip) =>
-		blameToken @tokens[@ip], 'function stack overflow' if #@functionStack >= 1024
-		table.insert @functionStack, @ip
-		@ip = ip
-}
-tokens, labels = nil, nil
+	unless context
+		context = {
+			modules: {}
+			labels: {}
+		}
+	
+	return nil, "module '#{modname}' already exists" if context.modules[modname]
+	
+	module = {
+		name: modname
+		:filename
+		:source
+	}
+	context.modules[modname] = module
 
-with state
-	while .ip < .labels.exit
-		assert .ip >= 1
-		token = .tokens[.ip]
+	module.tokens, _, errByte = lexer.lex source, {
+		{'whitespace', '%s+'}
+		{'literal', '"([^"]*)"', "'([^']*)'", '%d+'}
+		{'import', ':([%w%-_/%.]+)'}
+		{'label', '([%w%-_]+):'}
+		{'address', '@([%w%-_]+)'}
+		{'comment', '#[^\n]*'}
+		{'identifier', '[^%c%s@:]+'}
+	}
+	
+	blameByteInModule module, errByte, 'unrecognized token' unless module.tokens
+
+	module.tokens = table.ireject module.tokens, (token) ->
+		token.type == 'whitespace' or token.type == 'comment'
+
+	module.tokens = table.map module.tokens, (token) ->
+		token.value = token.captures[1] or token.captures[0]
+		token.captures = nil
+		token
+	
+	directory = filename\gsub '[^/\\]+$', ''
+	
+	-- Find the index of each label token and load imports
+	for i, token in ipairs module.tokens
 		switch token.type
-			when 'literal'
-				\push token.value
-			when 'identifier'
-				address = .labels[token.value]
-				-- Check if label is defined
-				if address
-					\call address
-				else
+			when 'label'
+				blameTokenInModule module, token, "redefinition of label '#{token.value}'" if context.labels[token.value]
+				context.labels[token.value] = "#{i}:#{module.name}"
+			when 'import'
+				modname = token.value
+				context, err = loadFile "#{directory}#{modname}.bot", context, modname
+				context = loadFile "#{directory}#{modname}/init.bot", context, modname unless context
+				blameTokenInModule module, token, "could not import module '#{modname}': #{err}" unless context
+
+	-- Check for invalid addressing and convert to literal
+	for i, token in ipairs module.tokens
+		if token.type == 'address'
+			blameTokenInModule module, token, 'no such label exists' unless context.labels[token.value]
+			token.type = 'literal'
+			token.value = context.labels[token.value]
+	
+	return context
+
+runContext = (context) ->
+	blameNoone "start label not found" unless context.labels.start
+	
+	state = {
+		:context
+		ip: context.labels.start
+		stack: {}
+		functionStack: {}
+		
+		nextIP: =>
+			i, modname = @splitIP @ip
+			@ip = "#{i + 1}:#{modname}"
+		splitIP: (ip = @ip) =>
+			i, modname = ip\match '^(%d+):(.*)$'
+			i = tonumber i if i
+			@blame "corrupted address" unless i
+			return i, modname
+		getToken: (ip = @ip) =>
+			i, modname = @splitIP ip
+			module = context.modules[modname]
+			assert module, "module '#{modname}' does not exist in the context"
+			token = module.tokens[i]
+			assert token, "token #{i} in module '#{modname}' does not exist"
+			return token
+		blame: (message) =>
+			i, modname = @splitIP @ip
+			module = @context.modules[modname]
+			blameTokenInModule module, i, message
+		popn: (n) =>
+			@blame "expected at least #{n} values on the stack, got #{#@stack}" if #@stack < n
+			values = {}
+			for i = n, 1, -1
+				values[i] = @pop!
+			values
+		pop: =>
+			@blame "expected a value on the stack, got none" if #@stack < 1
+			value = @stack[#@stack]
+			@stack[#@stack] = nil
+			value
+		popnum: =>
+			value = @pop!
+			value = tonumber value
+			@blame 'expected a number as argument' unless value
+			value
+		popbool: => @pop! != '0'
+		push: (value) =>
+			switch type value
+				when 'boolean'
+					value = value and '1' or '0'
+				when 'nil', 'table'
+					error "atempted to push a #{type value} value onto the stack", 2
+			table.insert @stack, tostring value
+		call: (ip) =>
+			@blame 'function stack overflow' if #@functionStack >= 1024
+			table.insert @functionStack, @ip
+			@ip = ip
+	}
+	
+	with state
+		while true
+			token = \getToken!
+			switch token.type
+				when 'literal'
+					\push token.value
+				when 'identifier'
 					-- Check for built-ins
 					switch token.value
 						when 'write'
@@ -166,7 +200,7 @@ with state
 							\popn 2
 						when 'error'
 							value = \pop!
-							blameToken token, value
+							\blame value
 						when 'trace'
 							values = {}
 							for i, value in ipairs .stack
@@ -217,8 +251,8 @@ with state
 							\call \popnum!
 						when 'address'
 							value = \pop!
-							value = .labels[value]
-							blameToken token, 'no such label exists' unless value
+							value = .context.labels[value]
+							\blame 'no such label exists' unless value
 							\push value
 						when 'jump'
 							value = \popnum!
@@ -226,17 +260,26 @@ with state
 							-- it's ok to not continue here and let the ip increment
 							-- since we would land on a label anyway, which would be a noop
 						when 'cond-jump'
-							address = \popnum!
+							address = \pop!
 							condition = \popbool!
 							.ip = address if condition
 						when 'return'
 							fslen = #.functionStack
-							blameToken token, 'function stack already empty' if fslen == 0
+							\blame 'function stack already empty' if fslen == 0
 							.ip = .functionStack[fslen]
 							.functionStack[fslen] = nil
 						when 'exit'
-							.ip = .labels.exit
-							continue
+							break
 						else
-							blameToken token, 'unrecognised symbol'
-		.ip += 1
+							-- Check if label is defined
+							address = .context.labels[token.value]
+							if address
+								\call address
+							else
+								\blame 'unrecognised symbol'
+			\nextIP!
+	return state.stack
+
+context, err = loadFile 'test.bot'
+blameNoone err unless context
+runContext context

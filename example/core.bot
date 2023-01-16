@@ -1,0 +1,14 @@
+# Standard library core functions
+
+assert:
+	# ... cond message
+	store
+	# message ... cond
+	@assertion-ok cond-jump
+	# message ...
+	load error
+assertion-ok:
+	# message ...
+	load delete
+	# ...
+	return
