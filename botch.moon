@@ -1,6 +1,5 @@
-inspect = require 'inspect'
 lithium = require 'lithium.init'
-import string, table, lexer, io, util from lithium
+import string, table, lexer, io from lithium
 import unpack from table
 
 splitIP = (ip) ->
@@ -225,7 +224,7 @@ runContext = (context) ->
 						when 'trace'
 							values = {}
 							for i, value in ipairs .stack
-								values[i] = inspect value
+								values[i] = string.format '%q', value
 							io.stderr\write "stack (#{#.stack}): ", table.concat(values, ', '), '\n'
 						when 'concat'
 							a, b = unpack \popn 2
