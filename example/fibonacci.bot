@@ -1,0 +1,32 @@
+# Fibonacci sequence of n numbers
+
+start:
+	0 1 # Initial fib values
+
+	10 # n
+	
+	# We'll print 2 of them manually
+	2 - store
+
+	"Fibonacci sequence of " write
+	dup write
+	" numbers:" write-line
+
+	dup2 swap
+	write-line write-line
+	
+	start-loop:
+	# n ... a b
+	dup2 +
+	# n ... a b c
+	store store delete load load
+	# n ... b c
+	dup write-line
+	load -- dup store
+	@start-loop cond-jump
+	
+	# n ... a b
+	load delete delete delete
+	# ...
+	
+	exit

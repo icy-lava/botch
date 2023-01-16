@@ -1,0 +1,19 @@
+# Hello world and "for loop"
+
+start:
+	8 # Loop count
+
+	dup # Keep original count for later
+
+	say-hello:
+	# ... n i
+	"Hello world!" write-line
+	-- dup @say-hello cond-jump
+
+	# ... n i
+	delete
+
+	# ... n
+	write " times is enough!" write-line
+	
+	exit

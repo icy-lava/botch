@@ -1,0 +1,5 @@
+# Hello world
+
+start:
+	"Hello world!" write-line
+	exit
