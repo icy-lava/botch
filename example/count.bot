@@ -1,0 +1,14 @@
+# Write a sequence of numbers from 1 to 10
+
+start:
+	0 10
+start-loop:
+	# i n
+	swap
+	# n i
+	++ dup write-line
+	swap -- dup
+	# i n-1
+	@start-loop cond-jump
+	# i 0
+	exit
