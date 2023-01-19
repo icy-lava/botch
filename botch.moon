@@ -10,7 +10,7 @@ version = "#{major}.#{minor}.#{patch}"
 splitIP = (ip) ->
 	i, modname = ip\match '^(%d+):(.*)$'
 	i = tonumber i if i
-	@blame "corrupted address" unless i
+	assert i, 'corrupted address'
 	return i, modname
 
 getLocation = (context, ip) ->

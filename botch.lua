@@ -13,9 +13,7 @@ splitIP = function(ip)
   if i then
     i = tonumber(i)
   end
-  if not (i) then
-    self:blame("corrupted address")
-  end
+  assert(i, 'corrupted address')
   return i, modname
 end
 local getLocation
