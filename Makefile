@@ -1,7 +1,9 @@
 .PHONY: run
 run:
-	moon botch.moon example/hello.bot
+	moon botch.moon repl
+
+%.lua: %.moon
+	moonc $<
 
 .PHONY: build
-build:
-	moonc botch.moon
+build: botch.lua

@@ -2,6 +2,11 @@ lithium = require 'lithium.init'
 import string, table, lexer, io from lithium
 import unpack from table
 
+major = 0
+minor = 0
+patch = 0
+version = "#{major}.#{minor}.#{patch}"
+
 splitIP = (ip) ->
 	i, modname = ip\match '^(%d+):(.*)$'
 	i = tonumber i if i
@@ -300,10 +305,27 @@ runContext = (context) ->
 			\nextIP!
 	return state.stack
 
-unless arg[1]
-	io.stderr\write "usage: #{arg[0]} <source>\n"
-	return
+usage = ->
+	io.stderr\write "usage: #{arg[0]} run <source>\n"
+	io.stderr\write "   or: #{arg[0]} repl\n"
+	os.exit!
 
-context, err = loadFile arg[1]
-blameNoone err unless context
-runContext context
+switch arg[1] and arg[1]\lower!
+	when 'run'
+		usage! unless arg[2]
+		context, err = loadFile arg[2]
+		blameNoone err unless context
+		runContext context
+	when 'repl'
+		io.stderr\write "Welcome to Botch #{version}\n"
+		id = 1
+		while true
+			name = "repl-#{id}"
+			io.stderr\write "(#{id}) $ "
+			io.stderr\flush!
+			input = io.stdin\read '*l'
+			io.stderr\write 'REPL is not implemented yet\n'
+			io.stderr\flush!
+			id += 1
+	else
+		usage!

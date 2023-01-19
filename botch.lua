@@ -3,6 +3,10 @@ local string, table, lexer, io
 string, table, lexer, io = lithium.string, lithium.table, lithium.lexer, lithium.io
 local unpack
 unpack = table.unpack
+local major = 0
+local minor = 0
+local patch = 0
+local version = tostring(major) .. "." .. tostring(minor) .. "." .. tostring(patch)
 local splitIP
 splitIP = function(ip)
   local i, modname = ip:match('^(%d+):(.*)$')
@@ -384,12 +388,34 @@ runContext = function(context)
   end
   return state.stack
 end
-if not (arg[1]) then
-  io.stderr:write("usage: " .. tostring(arg[0]) .. " <source>\n")
-  return 
+local usage
+usage = function()
+  io.stderr:write("usage: " .. tostring(arg[0]) .. " run <source>\n")
+  io.stderr:write("   or: " .. tostring(arg[0]) .. " repl\n")
+  return os.exit()
 end
-local context, err = loadFile(arg[1])
-if not (context) then
-  blameNoone(err)
+local _exp_0 = arg[1] and arg[1]:lower()
+if 'run' == _exp_0 then
+  if not (arg[2]) then
+    usage()
+  end
+  local context, err = loadFile(arg[2])
+  if not (context) then
+    blameNoone(err)
+  end
+  return runContext(context)
+elseif 'repl' == _exp_0 then
+  io.stderr:write("Welcome to Botch " .. tostring(version) .. "\n")
+  local id = 1
+  while true do
+    local name = "repl-" .. tostring(id)
+    io.stderr:write("(" .. tostring(id) .. ") $ ")
+    io.stderr:flush()
+    local input = io.stdin:read('*l')
+    io.stderr:write('REPL is not implemented yet\n')
+    io.stderr:flush()
+    id = id + 1
+  end
+else
+  return usage()
 end
-return runContext(context)

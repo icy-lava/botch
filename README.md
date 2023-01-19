@@ -10,9 +10,9 @@ You'll need `lua`, `luajit` or `moon` (MoonScript) in your system path.
 git clone --recurse-submodules https://github.com/icy-lava/botch.git
 cd botch
 
-lua botch.lua example/hello.bot
+lua botch.lua run example/hello.bot
 # Or, if you have moonscript in your system path
-moon botch.moon example/hello.bot
+moon botch.moon run example/hello.bot
 ```
 
 ## Examples
