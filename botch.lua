@@ -1,7 +1,6 @@
-local inspect = require('inspect')
 local lithium = require('lithium.init')
-local string, table, lexer, io, util
-string, table, lexer, io, util = lithium.string, lithium.table, lithium.lexer, lithium.io, lithium.util
+local string, table, lexer, io
+string, table, lexer, io = lithium.string, lithium.table, lithium.lexer, lithium.io
 local unpack
 unpack = table.unpack
 local splitIP
@@ -300,7 +299,7 @@ runContext = function(context)
         elseif 'trace' == _exp_1 then
           local values = { }
           for i, value in ipairs(state.stack) do
-            values[i] = inspect(value)
+            values[i] = string.format('%q', value)
           end
           io.stderr:write("stack (" .. tostring(#state.stack) .. "): ", table.concat(values, ', '), '\n')
         elseif 'concat' == _exp_1 then
