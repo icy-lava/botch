@@ -96,4 +96,4 @@ start:
 
 ## Learning
 
-To learn what built-ins are available to you, take a look at the lower half of `botch.moon`.
+To learn what built-ins are available to you, take a look at `botch.moon`.

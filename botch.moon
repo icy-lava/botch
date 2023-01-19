@@ -1,10 +1,12 @@
+#!/usr/bin/env moon
+
 lithium = require 'lithium.init'
-import string, table, lexer, io from lithium
-import unpack from table
+import string, table, lexer, io, util from lithium
+import pack, unpack from table
 
 major = 0
 minor = 1
-patch = 0
+patch = 1
 version = "#{major}.#{minor}.#{patch}"
 
 splitIP = (ip) ->
@@ -25,18 +27,39 @@ getLocationString = (context, ip) ->
 	filename, line, col, token = getLocation context, ip
 	"#{filename}:#{line}:#{col}", token.value
 
+botchErrorID = {}
+botchError = (message) ->
+	coroutine.yield {
+		message: message
+		:botchErrorID
+	}
+
+isBotchError = (errObject) -> ('table' == type errObject) and errObject.botchErrorID == botchErrorID
+
+getBotchError = (cor, status, ...) ->
+	if status
+		if select('#', ...) == 1 and isBotchError (...)
+			return (...)
+		return nil
+	else
+		err = ...
+		trace = debug.traceback cor, err, 2
+		trace = util.rewriteTraceback trace
+		io.stderr\write trace, '\n'
+		os.exit 1
+
 blameNoone = (message) ->
 	io.stderr\write "error: #{message}\n"
-	os.exit 1
+	botchError message
 
 blameModule = (module, message) ->
 	io.stderr\write "#{module.filename or module.name}: error: #{message}\n"
-	os.exit 1
+	botchError message
 
 blameByteInModule = (module, i, message) ->
 	line, col = string.positionAt module.source, i
 	io.stderr\write "#{module.filename or module.name}:#{line}:#{col}: error: #{message}\n"
-	os.exit 1
+	botchError message
 
 blameTokenInModule = (module, token, message) ->
 	if 'number' == type token
@@ -56,7 +79,9 @@ blameRuntime = (context, message) ->
 		ip = context.functionStack[i]
 		location, token = getLocationString context, ip
 		io.stderr\write "    at #{location} in #{token}\n"
-	os.exit 1
+	botchError message
+
+local contextMT
 
 loadSource = (filename, source, context, modname = '') ->
 	unless source
@@ -69,10 +94,10 @@ loadSource = (filename, source, context, modname = '') ->
 	if context
 		context = context\clone!
 	else
-		context = {
+		context = setmetatable {
 			modules: {}
 			labels: {}
-		}
+		}, contextMT
 	
 	return nil, "module '#{modname}' already exists" if context.modules[modname]
 	
@@ -126,7 +151,6 @@ loadSource = (filename, source, context, modname = '') ->
 	
 	return context
 
-local contextMT
 contextMT = {
 	__index: {
 		clone: => setmetatable table.clone(@), contextMT
@@ -292,7 +316,7 @@ contextMT = {
 					when 'exit'
 						os.exit!
 					else
-						replOK = true
+						replOK = repl
 						if repl
 							-- REPL specific built-ins
 							switch symbol
@@ -353,10 +377,15 @@ usage = ->
 switch arg[1] and arg[1]\lower!
 	when 'run'
 		usage! unless arg[2]
-		context, err = loadSource arg[2]
-		blameNoone err unless context
-		initializeRuntime context
-		runContext context
+		cor = coroutine.create ->
+			context, err = loadSource arg[2]
+			blameNoone err unless context
+			initializeRuntime context
+			runContext context
+		while 'suspended' == coroutine.status cor
+			err = getBotchError cor, coroutine.resume cor
+			if err
+				os.exit 1
 	when 'repl'
 		id = 1
 		context = nil
@@ -367,16 +396,22 @@ switch arg[1] and arg[1]\lower!
 			io.stderr\write "(#{id}) $ "
 			io.stderr\flush!
 			
-			input = io.stdin\read '*l'
-			newContext, err = loadSource nil, input, context, name
-			initializeRuntime newContext, mergeIP 1, name
-			if newContext
-				newContext.stack = context and table.icopy(context.stack) or newContext.stack
-				runContext newContext, nil, true
-				context = newContext
-				context\execute 'trace' if context.trace != false
-			else
-				io.stderr\write "#{err}\n"
+			input = assert io.stdin\read '*l'
+			cor = coroutine.create ->
+				newContext, err = loadSource nil, input, context, name
+				initializeRuntime newContext, mergeIP 1, name
+				if newContext
+					newContext.stack = context and table.icopy(context.stack) or newContext.stack
+					runContext newContext, nil, true
+					context = newContext
+					context\execute 'trace' if context.trace != false
+				else
+					io.stderr\write "#{err}\n"
+			
+			while 'suspended' == coroutine.status cor
+				err = getBotchError cor, coroutine.resume cor
+				if err
+					break
 			
 			id += 1
 	else

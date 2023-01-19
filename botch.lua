@@ -1,11 +1,11 @@
 local lithium = require('lithium.init')
-local string, table, lexer, io
-string, table, lexer, io = lithium.string, lithium.table, lithium.lexer, lithium.io
-local unpack
-unpack = table.unpack
+local string, table, lexer, io, util
+string, table, lexer, io, util = lithium.string, lithium.table, lithium.lexer, lithium.io, lithium.util
+local pack, unpack
+pack, unpack = table.pack, table.unpack
 local major = 0
 local minor = 1
-local patch = 0
+local patch = 1
 local version = tostring(major) .. "." .. tostring(minor) .. "." .. tostring(patch)
 local splitIP
 splitIP = function(ip)
@@ -35,21 +35,48 @@ getLocationString = function(context, ip)
   local filename, line, col, token = getLocation(context, ip)
   return tostring(filename) .. ":" .. tostring(line) .. ":" .. tostring(col), token.value
 end
+local botchErrorID = { }
+local botchError
+botchError = function(message)
+  return coroutine.yield({
+    message = message,
+    botchErrorID = botchErrorID
+  })
+end
+local isBotchError
+isBotchError = function(errObject)
+  return ('table' == type(errObject)) and errObject.botchErrorID == botchErrorID
+end
+local getBotchError
+getBotchError = function(cor, status, ...)
+  if status then
+    if select('#', ...) == 1 and isBotchError((...)) then
+      return (...)
+    end
+    return nil
+  else
+    local err = ...
+    local trace = debug.traceback(cor, err, 2)
+    trace = util.rewriteTraceback(trace)
+    io.stderr:write(trace, '\n')
+    return os.exit(1)
+  end
+end
 local blameNoone
 blameNoone = function(message)
   io.stderr:write("error: " .. tostring(message) .. "\n")
-  return os.exit(1)
+  return botchError(message)
 end
 local blameModule
 blameModule = function(module, message)
   io.stderr:write(tostring(module.filename or module.name) .. ": error: " .. tostring(message) .. "\n")
-  return os.exit(1)
+  return botchError(message)
 end
 local blameByteInModule
 blameByteInModule = function(module, i, message)
   local line, col = string.positionAt(module.source, i)
   io.stderr:write(tostring(module.filename or module.name) .. ":" .. tostring(line) .. ":" .. tostring(col) .. ": error: " .. tostring(message) .. "\n")
-  return os.exit(1)
+  return botchError(message)
 end
 local blameTokenInModule
 blameTokenInModule = function(module, token, message)
@@ -77,8 +104,9 @@ blameRuntime = function(context, message)
     local location, token = getLocationString(context, ip)
     io.stderr:write("    at " .. tostring(location) .. " in " .. tostring(token) .. "\n")
   end
-  return os.exit(1)
+  return botchError(message)
 end
+local contextMT
 local loadSource
 loadSource = function(filename, source, context, modname)
   if modname == nil then
@@ -98,10 +126,10 @@ loadSource = function(filename, source, context, modname)
   if context then
     context = context:clone()
   else
-    context = {
+    context = setmetatable({
       modules = { },
       labels = { }
-    }
+    }, contextMT)
   end
   if context.modules[modname] then
     return nil, "module '" .. tostring(modname) .. "' already exists"
@@ -187,7 +215,6 @@ loadSource = function(filename, source, context, modname)
   end
   return context
 end
-local contextMT
 contextMT = {
   __index = {
     clone = function(self)
@@ -397,7 +424,7 @@ contextMT = {
         elseif 'exit' == _exp_0 then
           os.exit()
         else
-          local replOK = true
+          local replOK = repl
           if repl then
             local _exp_1 = symbol
             if 'trace-on' == _exp_1 then
@@ -483,12 +510,20 @@ if 'run' == _exp_0 then
   if not (arg[2]) then
     usage()
   end
-  local context, err = loadSource(arg[2])
-  if not (context) then
-    blameNoone(err)
+  local cor = coroutine.create(function()
+    local context, err = loadSource(arg[2])
+    if not (context) then
+      blameNoone(err)
+    end
+    initializeRuntime(context)
+    return runContext(context)
+  end)
+  while 'suspended' == coroutine.status(cor) do
+    local err = getBotchError(cor, coroutine.resume(cor))
+    if err then
+      os.exit(1)
+    end
   end
-  initializeRuntime(context)
-  return runContext(context)
 elseif 'repl' == _exp_0 then
   local id = 1
   local context = nil
@@ -497,18 +532,26 @@ elseif 'repl' == _exp_0 then
     local name = "repl-" .. tostring(id)
     io.stderr:write("(" .. tostring(id) .. ") $ ")
     io.stderr:flush()
-    local input = io.stdin:read('*l')
-    local newContext, err = loadSource(nil, input, context, name)
-    initializeRuntime(newContext, mergeIP(1, name))
-    if newContext then
-      newContext.stack = context and table.icopy(context.stack) or newContext.stack
-      runContext(newContext, nil, true)
-      context = newContext
-      if context.trace ~= false then
-        context:execute('trace')
+    local input = assert(io.stdin:read('*l'))
+    local cor = coroutine.create(function()
+      local newContext, err = loadSource(nil, input, context, name)
+      initializeRuntime(newContext, mergeIP(1, name))
+      if newContext then
+        newContext.stack = context and table.icopy(context.stack) or newContext.stack
+        runContext(newContext, nil, true)
+        context = newContext
+        if context.trace ~= false then
+          return context:execute('trace')
+        end
+      else
+        return io.stderr:write(tostring(err) .. "\n")
       end
-    else
-      io.stderr:write(tostring(err) .. "\n")
+    end)
+    while 'suspended' == coroutine.status(cor) do
+      local err = getBotchError(cor, coroutine.resume(cor))
+      if err then
+        break
+      end
     end
     id = id + 1
   end
