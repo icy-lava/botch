@@ -4,7 +4,7 @@ import unpack from table
 
 major = 0
 minor = 0
-patch = 0
+patch = 1
 version = "#{major}.#{minor}.#{patch}"
 
 splitIP = (ip) ->
@@ -17,7 +17,7 @@ getLocation = (context, ip) ->
 	i, modname = splitIP ip
 	module = context.modules[modname]
 	line, col = string.positionAt module.source, module.tokens[i].start
-	return module.filename, line, col, module.tokens[i]
+	return module.filename or module.name, line, col, module.tokens[i]
 
 getLocationString = (context, ip) ->
 	filename, line, col, token = getLocation context, ip
@@ -28,12 +28,12 @@ blameNoone = (message) ->
 	os.exit 1
 
 blameModule = (module, message) ->
-	io.stderr\write "#{module.filename}: error: #{message}\n"
+	io.stderr\write "#{module.filename or module.name}: error: #{message}\n"
 	os.exit 1
 
 blameByteInModule = (module, i, message) ->
 	line, col = string.positionAt module.source, i
-	io.stderr\write "#{module.filename}:#{line}:#{col}: error: #{message}\n"
+	io.stderr\write "#{module.filename or module.name}:#{line}:#{col}: error: #{message}\n"
 	os.exit 1
 
 blameTokenInModule = (module, token, message) ->
@@ -55,9 +55,13 @@ blameState = (state, message) ->
 		io.stderr\write "    at #{location} in #{token}\n"
 	os.exit 1
 
-loadFile = (filename, context, modname = '') ->
-	source, err = io.readBytes filename
-	return nil, err unless source
+loadSource = (filename, source, context, modname = '') ->
+	unless source
+		if filename
+			source, err = io.readBytes filename
+			return nil, err unless source
+		else
+			error 'either source data or filename must be provided'
 	
 	unless context
 		context = {
@@ -94,7 +98,7 @@ loadFile = (filename, context, modname = '') ->
 		token.captures = nil
 		token
 	
-	directory = filename\gsub '[^/\\]+$', ''
+	directory = filename and filename\gsub('[^/\\]+$', '') or ''
 	
 	-- Find the index of each label token and load imports
 	for i, token in ipairs module.tokens
@@ -104,8 +108,8 @@ loadFile = (filename, context, modname = '') ->
 				context.labels[token.value] = "#{i}:#{module.name}"
 			when 'import'
 				modname = token.value
-				context, err = loadFile "#{directory}#{modname}.bot", context, modname
-				context = loadFile "#{directory}#{modname}/init.bot", context, modname unless context
+				context, err = loadSource "#{directory}#{modname}.bot", nil, context, modname
+				context = loadSource "#{directory}#{modname}/init.bot", nil, context, modname unless context
 				blameTokenInModule module, token, "could not import module '#{modname}': #{err}" unless context
 
 	-- Check for invalid addressing and convert to literal
@@ -137,30 +141,33 @@ runContext = (context) ->
 			assert token, "token #{i} in module '#{modname}' does not exist"
 			return token
 		blame: (message) => blameState @, message
+		popi: (i) =>
+			@blame "expected a value on the stack, got none" if #@stack < 1
+			value = @stack[i]
+			error "invalid stack index #{i}" unless value
+			table.remove @stack, i
+			value
 		popn: (n) =>
 			@blame "expected at least #{n} values on the stack, got #{#@stack}" if #@stack < n
 			values = {}
 			for i = n, 1, -1
 				values[i] = @pop!
 			values
-		pop: =>
-			@blame "expected a value on the stack, got none" if #@stack < 1
-			value = @stack[#@stack]
-			@stack[#@stack] = nil
-			value
+		pop: => @popi #@stack
 		popnum: =>
 			value = @pop!
 			value = tonumber value
 			@blame 'expected a number as argument' unless value
 			value
 		popbool: => @pop! != '0'
-		push: (value) =>
+		pushi: (i, value) =>
 			switch type value
 				when 'boolean'
 					value = value and '1' or '0'
 				when 'nil', 'table'
 					error "atempted to push a #{type value} value onto the stack", 2
-			table.insert @stack, tostring value
+			table.insert @stack, i, tostring value
+		push: (value) => @pushi #@stack + 1, value
 		call: (ip) =>
 			@blame 'function stack overflow' if #@functionStack >= 1024
 			table.insert @functionStack, @ip
@@ -198,13 +205,9 @@ runContext = (context) ->
 						when 'stack-count'
 							\push #.stack
 						when 'store'
-							value = \pop!
-							table.insert .stack, 1, tostring value
+							\pushi 1, \pop!
 						when 'load'
-							-- FIXME: this does not check if the stack has a value like pop does
-							value = .stack[1]
-							table.remove .stack, 1
-							table.insert .stack, tostring value
+							\push \popi 1
 						when 'swap'
 							a, b = unpack \popn 2
 							\push b
@@ -224,8 +227,7 @@ runContext = (context) ->
 						when 'delete2'
 							\popn 2
 						when 'error'
-							value = \pop!
-							\blame value
+							\blame \pop!
 						when 'trace'
 							values = {}
 							for i, value in ipairs .stack
@@ -313,7 +315,7 @@ usage = ->
 switch arg[1] and arg[1]\lower!
 	when 'run'
 		usage! unless arg[2]
-		context, err = loadFile arg[2]
+		context, err = loadSource arg[2]
 		blameNoone err unless context
 		runContext context
 	when 'repl'

@@ -5,7 +5,7 @@ local unpack
 unpack = table.unpack
 local major = 0
 local minor = 0
-local patch = 0
+local patch = 1
 local version = tostring(major) .. "." .. tostring(minor) .. "." .. tostring(patch)
 local splitIP
 splitIP = function(ip)
@@ -21,7 +21,7 @@ getLocation = function(context, ip)
   local i, modname = splitIP(ip)
   local module = context.modules[modname]
   local line, col = string.positionAt(module.source, module.tokens[i].start)
-  return module.filename, line, col, module.tokens[i]
+  return module.filename or module.name, line, col, module.tokens[i]
 end
 local getLocationString
 getLocationString = function(context, ip)
@@ -35,13 +35,13 @@ blameNoone = function(message)
 end
 local blameModule
 blameModule = function(module, message)
-  io.stderr:write(tostring(module.filename) .. ": error: " .. tostring(message) .. "\n")
+  io.stderr:write(tostring(module.filename or module.name) .. ": error: " .. tostring(message) .. "\n")
   return os.exit(1)
 end
 local blameByteInModule
 blameByteInModule = function(module, i, message)
   local line, col = string.positionAt(module.source, i)
-  io.stderr:write(tostring(module.filename) .. ":" .. tostring(line) .. ":" .. tostring(col) .. ": error: " .. tostring(message) .. "\n")
+  io.stderr:write(tostring(module.filename or module.name) .. ":" .. tostring(line) .. ":" .. tostring(col) .. ": error: " .. tostring(message) .. "\n")
   return os.exit(1)
 end
 local blameTokenInModule
@@ -69,14 +69,21 @@ blameState = function(state, message)
   end
   return os.exit(1)
 end
-local loadFile
-loadFile = function(filename, context, modname)
+local loadSource
+loadSource = function(filename, source, context, modname)
   if modname == nil then
     modname = ''
   end
-  local source, err = io.readBytes(filename)
   if not (source) then
-    return nil, err
+    if filename then
+      local err
+      source, err = io.readBytes(filename)
+      if not (source) then
+        return nil, err
+      end
+    else
+      error('either source data or filename must be provided')
+    end
   end
   if not (context) then
     context = {
@@ -137,7 +144,7 @@ loadFile = function(filename, context, modname)
     token.captures = nil
     return token
   end)
-  local directory = filename:gsub('[^/\\]+$', '')
+  local directory = filename and filename:gsub('[^/\\]+$', '') or ''
   for i, token in ipairs(module.tokens) do
     local _exp_0 = token.type
     if 'label' == _exp_0 then
@@ -147,9 +154,10 @@ loadFile = function(filename, context, modname)
       context.labels[token.value] = tostring(i) .. ":" .. tostring(module.name)
     elseif 'import' == _exp_0 then
       modname = token.value
-      context, err = loadFile(tostring(directory) .. tostring(modname) .. ".bot", context, modname)
+      local err
+      context, err = loadSource(tostring(directory) .. tostring(modname) .. ".bot", nil, context, modname)
       if not (context) then
-        context = loadFile(tostring(directory) .. tostring(modname) .. "/init.bot", context, modname)
+        context = loadSource(tostring(directory) .. tostring(modname) .. "/init.bot", nil, context, modname)
       end
       if not (context) then
         blameTokenInModule(module, token, "could not import module '" .. tostring(modname) .. "': " .. tostring(err))
@@ -195,6 +203,17 @@ runContext = function(context)
     blame = function(self, message)
       return blameState(self, message)
     end,
+    popi = function(self, i)
+      if #self.stack < 1 then
+        self:blame("expected a value on the stack, got none")
+      end
+      local value = self.stack[i]
+      if not (value) then
+        error("invalid stack index " .. tostring(i))
+      end
+      table.remove(self.stack, i)
+      return value
+    end,
     popn = function(self, n)
       if #self.stack < n then
         self:blame("expected at least " .. tostring(n) .. " values on the stack, got " .. tostring(#self.stack))
@@ -206,12 +225,7 @@ runContext = function(context)
       return values
     end,
     pop = function(self)
-      if #self.stack < 1 then
-        self:blame("expected a value on the stack, got none")
-      end
-      local value = self.stack[#self.stack]
-      self.stack[#self.stack] = nil
-      return value
+      return self:popi(#self.stack)
     end,
     popnum = function(self)
       local value = self:pop()
@@ -224,14 +238,17 @@ runContext = function(context)
     popbool = function(self)
       return self:pop() ~= '0'
     end,
-    push = function(self, value)
+    pushi = function(self, i, value)
       local _exp_0 = type(value)
       if 'boolean' == _exp_0 then
         value = value and '1' or '0'
       elseif 'nil' == _exp_0 or 'table' == _exp_0 then
         error("atempted to push a " .. tostring(type(value)) .. " value onto the stack", 2)
       end
-      return table.insert(self.stack, tostring(value))
+      return table.insert(self.stack, i, tostring(value))
+    end,
+    push = function(self, value)
+      return self:pushi(#self.stack + 1, value)
     end,
     call = function(self, ip)
       if #self.functionStack >= 1024 then
@@ -271,12 +288,9 @@ runContext = function(context)
         elseif 'stack-count' == _exp_1 then
           state:push(#state.stack)
         elseif 'store' == _exp_1 then
-          local value = state:pop()
-          table.insert(state.stack, 1, tostring(value))
+          state:pushi(1, state:pop())
         elseif 'load' == _exp_1 then
-          local value = state.stack[1]
-          table.remove(state.stack, 1)
-          table.insert(state.stack, tostring(value))
+          state:push(state:popi(1))
         elseif 'swap' == _exp_1 then
           local a, b = unpack(state:popn(2))
           state:push(b)
@@ -296,8 +310,7 @@ runContext = function(context)
         elseif 'delete2' == _exp_1 then
           state:popn(2)
         elseif 'error' == _exp_1 then
-          local value = state:pop()
-          state:blame(value)
+          state:blame(state:pop())
         elseif 'trace' == _exp_1 then
           local values = { }
           for i, value in ipairs(state.stack) do
@@ -397,7 +410,7 @@ if 'run' == _exp_0 then
   if not (arg[2]) then
     usage()
   end
-  local context, err = loadFile(arg[2])
+  local context, err = loadSource(arg[2])
   if not (context) then
     blameNoone(err)
   end
