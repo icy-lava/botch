@@ -4,8 +4,8 @@ string, table, lexer, io = lithium.string, lithium.table, lithium.lexer, lithium
 local unpack
 unpack = table.unpack
 local major = 0
-local minor = 0
-local patch = 1
+local minor = 1
+local patch = 0
 local version = tostring(major) .. "." .. tostring(minor) .. "." .. tostring(patch)
 local splitIP
 splitIP = function(ip)
@@ -16,8 +16,15 @@ splitIP = function(ip)
   assert(i, 'corrupted address')
   return i, modname
 end
+local mergeIP
+mergeIP = function(i, modname)
+  return tostring(i) .. ":" .. tostring(modname)
+end
 local getLocation
 getLocation = function(context, ip)
+  if ip == nil then
+    ip = context.ip
+  end
   local i, modname = splitIP(ip)
   local module = context.modules[modname]
   local line, col = string.positionAt(module.source, module.tokens[i].start)
@@ -51,10 +58,13 @@ blameTokenInModule = function(module, token, message)
   end
   return blameByteInModule(module, token.start, message)
 end
-local blameState
-blameState = function(state, message)
-  io.stderr:write(tostring(getLocationString(state.context, state.ip)) .. ": error: " .. tostring(message) .. "\n")
-  local fslen = #state.functionStack
+local blameRuntime
+blameRuntime = function(context, message)
+  if not (context.stack and context.functionStack) then
+    error('runtime not initialized')
+  end
+  io.stderr:write(tostring(getLocationString(context)) .. ": error: " .. tostring(message) .. "\n")
+  local fslen = #context.functionStack
   local to = math.max(1, fslen - 5 + 1)
   for i = fslen, to, -1 do
     if i == to then
@@ -63,8 +73,8 @@ blameState = function(state, message)
       end
       i = 1
     end
-    local ip = state.functionStack[i]
-    local location, token = getLocationString(state.context, ip)
+    local ip = context.functionStack[i]
+    local location, token = getLocationString(context, ip)
     io.stderr:write("    at " .. tostring(location) .. " in " .. tostring(token) .. "\n")
   end
   return os.exit(1)
@@ -85,7 +95,9 @@ loadSource = function(filename, source, context, modname)
       error('either source data or filename must be provided')
     end
   end
-  if not (context) then
+  if context then
+    context = context:clone()
+  else
     context = {
       modules = { },
       labels = { }
@@ -151,7 +163,7 @@ loadSource = function(filename, source, context, modname)
       if context.labels[token.value] then
         blameTokenInModule(module, token, "redefinition of label '" .. tostring(token.value) .. "'")
       end
-      context.labels[token.value] = tostring(i) .. ":" .. tostring(module.name)
+      context.labels[token.value] = mergeIP(i, module.name)
     elseif 'import' == _exp_0 then
       modname = token.value
       local err
@@ -175,16 +187,12 @@ loadSource = function(filename, source, context, modname)
   end
   return context
 end
-local runContext
-runContext = function(context)
-  if not (context.labels.start) then
-    blameNoone("start label not found")
-  end
-  local state = {
-    context = context,
-    ip = context.labels.start,
-    stack = { },
-    functionStack = { },
+local contextMT
+contextMT = {
+  __index = {
+    clone = function(self)
+      return setmetatable(table.clone(self), contextMT)
+    end,
     nextIP = function(self)
       local i, modname = splitIP(self.ip)
       self.ip = tostring(i + 1) .. ":" .. tostring(modname)
@@ -194,14 +202,16 @@ runContext = function(context)
         ip = self.ip
       end
       local i, modname = splitIP(ip)
-      local module = context.modules[modname]
+      local module = self.modules[modname]
       assert(module, "module '" .. tostring(modname) .. "' does not exist in the context")
       local token = module.tokens[i]
-      assert(token, "token " .. tostring(i) .. " in module '" .. tostring(modname) .. "' does not exist")
+      if not (token) then
+        return nil, "token " .. tostring(i) .. " in module '" .. tostring(modname) .. "' does not exist"
+      end
       return token
     end,
     blame = function(self, message)
-      return blameState(self, message)
+      return blameRuntime(self, message)
     end,
     popi = function(self, i)
       if #self.stack < 1 then
@@ -250,154 +260,217 @@ runContext = function(context)
     push = function(self, value)
       return self:pushi(#self.stack + 1, value)
     end,
+    canReturn = function(self)
+      return #self.functionStack > 0
+    end,
     call = function(self, ip)
       if #self.functionStack >= 1024 then
         self:blame('function stack overflow')
       end
       table.insert(self.functionStack, self.ip)
       self.ip = ip
-    end
-  }
-  do
-    while true do
-      local token = state:getToken()
-      local _exp_0 = token.type
-      if 'literal' == _exp_0 then
-        state:push(token.value)
-      elseif 'identifier' == _exp_0 then
-        local _exp_1 = token.value
-        if 'write' == _exp_1 then
-          local value = state:pop()
+    end,
+    execute = function(self, symbol, repl)
+      if repl == nil then
+        repl = false
+      end
+      do
+        local _with_0 = self
+        local _exp_0 = symbol
+        if 'write' == _exp_0 then
+          local value = _with_0:pop()
           io.stdout:write(value)
-        elseif 'write-line' == _exp_1 then
-          local value = state:pop()
+        elseif 'write-line' == _exp_0 then
+          local value = _with_0:pop()
           io.stdout:write(value, '\n')
-        elseif 'ewrite' == _exp_1 then
-          local value = state:pop()
+        elseif 'ewrite' == _exp_0 then
+          local value = _with_0:pop()
           io.stderr:write(value)
-        elseif 'ewrite-line' == _exp_1 then
-          local value = state:pop()
+        elseif 'ewrite-line' == _exp_0 then
+          local value = _with_0:pop()
           io.stderr:write(value, '\n')
-        elseif 'read-line' == _exp_1 then
-          state:push(io.stdin:read('*l'))
-        elseif 'read-all' == _exp_1 then
-          state:push(io.stdin:read('*a'))
-        elseif 'read-bytes' == _exp_1 then
-          local count = state:popnum()
-          state:push(io.stdin:read(count))
-        elseif 'stack-count' == _exp_1 then
-          state:push(#state.stack)
-        elseif 'store' == _exp_1 then
-          state:pushi(1, state:pop())
-        elseif 'load' == _exp_1 then
-          state:push(state:popi(1))
-        elseif 'swap' == _exp_1 then
-          local a, b = unpack(state:popn(2))
-          state:push(b)
-          state:push(a)
-        elseif 'dup' == _exp_1 then
-          local value = state:pop()
-          state:push(value)
-          state:push(value)
-        elseif 'dup2' == _exp_1 then
-          local a, b = unpack(state:popn(2))
-          state:push(a)
-          state:push(b)
-          state:push(a)
-          state:push(b)
-        elseif 'delete' == _exp_1 then
-          state:pop()
-        elseif 'delete2' == _exp_1 then
-          state:popn(2)
-        elseif 'error' == _exp_1 then
-          state:blame(state:pop())
-        elseif 'trace' == _exp_1 then
+        elseif 'read-line' == _exp_0 then
+          _with_0:push(io.stdin:read('*l'))
+        elseif 'read-all' == _exp_0 then
+          _with_0:push(io.stdin:read('*a'))
+        elseif 'read-bytes' == _exp_0 then
+          local count = _with_0:popnum()
+          _with_0:push(io.stdin:read(count))
+        elseif 'stack-count' == _exp_0 then
+          _with_0:push(#_with_0.stack)
+        elseif 'store' == _exp_0 then
+          _with_0:pushi(1, _with_0:pop())
+        elseif 'load' == _exp_0 then
+          _with_0:push(_with_0:popi(1))
+        elseif 'swap' == _exp_0 then
+          local a, b = unpack(_with_0:popn(2))
+          _with_0:push(b)
+          _with_0:push(a)
+        elseif 'dup' == _exp_0 then
+          local value = _with_0:pop()
+          _with_0:push(value)
+          _with_0:push(value)
+        elseif 'dup2' == _exp_0 then
+          local a, b = unpack(_with_0:popn(2))
+          _with_0:push(a)
+          _with_0:push(b)
+          _with_0:push(a)
+          _with_0:push(b)
+        elseif 'delete' == _exp_0 then
+          _with_0:pop()
+        elseif 'delete2' == _exp_0 then
+          _with_0:popn(2)
+        elseif 'error' == _exp_0 then
+          _with_0:blame(_with_0:pop())
+        elseif 'trace' == _exp_0 then
           local values = { }
-          for i, value in ipairs(state.stack) do
+          for i, value in ipairs(_with_0.stack) do
             values[i] = string.format('%q', value)
           end
-          io.stderr:write("stack (" .. tostring(#state.stack) .. "): ", table.concat(values, ', '), '\n')
-        elseif 'concat' == _exp_1 then
-          local a, b = unpack(state:popn(2))
-          state:push(a .. b)
-        elseif 'length' == _exp_1 then
-          state:push(#state:pop())
-        elseif '+' == _exp_1 then
-          local b, a = state:popnum(), state:popnum()
-          state:push(a + b)
-        elseif '-' == _exp_1 then
-          local b, a = state:popnum(), state:popnum()
-          state:push(a - b)
-        elseif '*' == _exp_1 then
-          local b, a = state:popnum(), state:popnum()
-          state:push(a * b)
-        elseif '**' == _exp_1 then
-          local b, a = state:popnum(), state:popnum()
-          state:push(math.pow(a, b))
-        elseif '/' == _exp_1 then
-          local b, a = state:popnum(), state:popnum()
-          state:push(a / b)
-        elseif '//' == _exp_1 then
-          local b, a = state:popnum(), state:popnum()
-          state:push(math.floor(a / b))
-        elseif '%' == _exp_1 then
-          local b, a = state:popnum(), state:popnum()
-          state:push(a % b)
-        elseif '++' == _exp_1 then
-          state:push(state:popnum() + 1)
-        elseif '--' == _exp_1 then
-          state:push(state:popnum() - 1)
-        elseif 'or' == _exp_1 then
-          local b, a = state:popbool(), state:popbool()
-          state:push(a or b)
-        elseif 'and' == _exp_1 then
-          local b, a = state:popbool(), state:popbool()
-          state:push(a and b)
-        elseif 'xor' == _exp_1 then
-          local b, a = state:popbool(), state:popbool()
-          state:push((a or b) and not (a and b))
-        elseif 'not' == _exp_1 then
-          state:push(not state:popbool())
-        elseif 'call' == _exp_1 then
-          state:call(state:popnum())
-        elseif 'address' == _exp_1 then
-          local value = state:pop()
-          value = state.context.labels[value]
+          io.stderr:write("stack (" .. tostring(#_with_0.stack) .. "): ", table.concat(values, ', '), '\n')
+        elseif 'concat' == _exp_0 then
+          local a, b = unpack(_with_0:popn(2))
+          _with_0:push(a .. b)
+        elseif 'length' == _exp_0 then
+          _with_0:push(#_with_0:pop())
+        elseif '+' == _exp_0 then
+          local b, a = _with_0:popnum(), _with_0:popnum()
+          _with_0:push(a + b)
+        elseif '-' == _exp_0 then
+          local b, a = _with_0:popnum(), _with_0:popnum()
+          _with_0:push(a - b)
+        elseif '*' == _exp_0 then
+          local b, a = _with_0:popnum(), _with_0:popnum()
+          _with_0:push(a * b)
+        elseif '**' == _exp_0 then
+          local b, a = _with_0:popnum(), _with_0:popnum()
+          _with_0:push(math.pow(a, b))
+        elseif '/' == _exp_0 then
+          local b, a = _with_0:popnum(), _with_0:popnum()
+          _with_0:push(a / b)
+        elseif '//' == _exp_0 then
+          local b, a = _with_0:popnum(), _with_0:popnum()
+          _with_0:push(math.floor(a / b))
+        elseif '%' == _exp_0 then
+          local b, a = _with_0:popnum(), _with_0:popnum()
+          _with_0:push(a % b)
+        elseif '++' == _exp_0 then
+          _with_0:push(_with_0:popnum() + 1)
+        elseif '--' == _exp_0 then
+          _with_0:push(_with_0:popnum() - 1)
+        elseif 'or' == _exp_0 then
+          local b, a = _with_0:popbool(), _with_0:popbool()
+          _with_0:push(a or b)
+        elseif 'and' == _exp_0 then
+          local b, a = _with_0:popbool(), _with_0:popbool()
+          _with_0:push(a and b)
+        elseif 'xor' == _exp_0 then
+          local b, a = _with_0:popbool(), _with_0:popbool()
+          _with_0:push((a or b) and not (a and b))
+        elseif 'not' == _exp_0 then
+          _with_0:push(not _with_0:popbool())
+        elseif 'call' == _exp_0 then
+          _with_0:call(_with_0:popnum())
+        elseif 'address' == _exp_0 then
+          local value = _with_0:pop()
+          value = _with_0.labels[value]
           if not (value) then
-            state:blame('no such label exists')
+            _with_0:blame('no such label exists')
           end
-          state:push(value)
-        elseif 'jump' == _exp_1 then
-          local value = state:popnum()
-          state.ip = value
-        elseif 'cond-jump' == _exp_1 then
-          local address = state:pop()
-          local condition = state:popbool()
+          _with_0:push(value)
+        elseif 'jump' == _exp_0 then
+          local value = _with_0:popnum()
+          _with_0.ip = value
+        elseif 'cond-jump' == _exp_0 then
+          local address = _with_0:pop()
+          local condition = _with_0:popbool()
           if condition then
-            state.ip = address
+            _with_0.ip = address
           end
-        elseif 'return' == _exp_1 then
-          local fslen = #state.functionStack
+        elseif 'return' == _exp_0 then
+          local fslen = #_with_0.functionStack
           if fslen == 0 then
-            state:blame('function stack already empty')
+            _with_0:blame('function stack already empty')
           end
-          state.ip = state.functionStack[fslen]
-          state.functionStack[fslen] = nil
-        elseif 'exit' == _exp_1 then
-          break
+          _with_0.ip = _with_0.functionStack[fslen]
+          _with_0.functionStack[fslen] = nil
+        elseif 'exit' == _exp_0 then
+          os.exit()
         else
-          local address = state.context.labels[token.value]
-          if address then
-            state:call(address)
-          else
-            state:blame('unrecognised symbol')
+          local replOK = true
+          if repl then
+            local _exp_1 = symbol
+            if 'trace-on' == _exp_1 then
+              self.trace = nil
+            elseif 'trace-off' == _exp_1 then
+              self.trace = false
+            elseif 'help' == _exp_1 then
+              io.stderr:write("Help is not implemented yet. Sorry :(\n")
+            else
+              replOK = false
+            end
+          end
+          if not (replOK) then
+            local address = _with_0.labels[symbol]
+            if address then
+              _with_0:call(address)
+            else
+              _with_0:blame('unrecognised symbol')
+            end
           end
         end
+        return _with_0
       end
-      state:nextIP()
+    end
+  }
+}
+local initializeRuntime
+initializeRuntime = function(context, startIP)
+  do
+    context.ip = startIP or context.labels.start
+    if not (context.ip) then
+      blameNoone("start label not found")
+    end
+    context.stack = { }
+    context.functionStack = { }
+  end
+  return setmetatable(context, contextMT)
+end
+local runContext
+runContext = function(context, startIP, repl)
+  if startIP then
+    context.ip = startIP
+  end
+  do
+    while true do
+      local _continue_0 = false
+      repeat
+        local token = context:getToken()
+        if not (token) then
+          if context:canReturn() then
+            context:execute('return', repl)
+            context:nextIP()
+            _continue_0 = true
+            break
+          else
+            break
+          end
+        end
+        local _exp_0 = token.type
+        if 'literal' == _exp_0 then
+          context:push(token.value)
+        elseif 'identifier' == _exp_0 then
+          context:execute(token.value, repl)
+        end
+        context:nextIP()
+        _continue_0 = true
+      until true
+      if not _continue_0 then
+        break
+      end
     end
   end
-  return state.stack
+  return context
 end
 local usage
 usage = function()
@@ -414,17 +487,29 @@ if 'run' == _exp_0 then
   if not (context) then
     blameNoone(err)
   end
+  initializeRuntime(context)
   return runContext(context)
 elseif 'repl' == _exp_0 then
-  io.stderr:write("Welcome to Botch " .. tostring(version) .. "\n")
   local id = 1
+  local context = nil
+  io.stderr:write("Welcome to Botch " .. tostring(version) .. "\n")
   while true do
     local name = "repl-" .. tostring(id)
     io.stderr:write("(" .. tostring(id) .. ") $ ")
     io.stderr:flush()
     local input = io.stdin:read('*l')
-    io.stderr:write('REPL is not implemented yet\n')
-    io.stderr:flush()
+    local newContext, err = loadSource(nil, input, context, name)
+    initializeRuntime(newContext, mergeIP(1, name))
+    if newContext then
+      newContext.stack = context and table.icopy(context.stack) or newContext.stack
+      runContext(newContext, nil, true)
+      context = newContext
+      if context.trace ~= false then
+        context:execute('trace')
+      end
+    else
+      io.stderr:write(tostring(err) .. "\n")
+    end
     id = id + 1
   end
 else

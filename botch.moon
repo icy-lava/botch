@@ -3,8 +3,8 @@ import string, table, lexer, io from lithium
 import unpack from table
 
 major = 0
-minor = 0
-patch = 1
+minor = 1
+patch = 0
 version = "#{major}.#{minor}.#{patch}"
 
 splitIP = (ip) ->
@@ -13,7 +13,9 @@ splitIP = (ip) ->
 	assert i, 'corrupted address'
 	return i, modname
 
-getLocation = (context, ip) ->
+mergeIP = (i, modname) -> "#{i}:#{modname}"
+
+getLocation = (context, ip = context.ip) ->
 	i, modname = splitIP ip
 	module = context.modules[modname]
 	line, col = string.positionAt module.source, module.tokens[i].start
@@ -42,16 +44,17 @@ blameTokenInModule = (module, token, message) ->
 	-- NOTE: we don't check if token is within the module.tokens
 	blameByteInModule module, token.start, message
 
-blameState = (state, message) ->
-	io.stderr\write "#{getLocationString state.context, state.ip}: error: #{message}\n"
-	fslen = #state.functionStack
+blameRuntime = (context, message) ->
+	error 'runtime not initialized' unless context.stack and context.functionStack
+	io.stderr\write "#{getLocationString context}: error: #{message}\n"
+	fslen = #context.functionStack
 	to = math.max 1, fslen - 5 + 1
 	for i = fslen, to, -1
 		if i == to
 			io.stderr\write '    ...\n' if i > 1
 			i = 1
-		ip = state.functionStack[i]
-		location, token = getLocationString state.context, ip
+		ip = context.functionStack[i]
+		location, token = getLocationString context, ip
 		io.stderr\write "    at #{location} in #{token}\n"
 	os.exit 1
 
@@ -63,7 +66,9 @@ loadSource = (filename, source, context, modname = '') ->
 		else
 			error 'either source data or filename must be provided'
 	
-	unless context
+	if context
+		context = context\clone!
+	else
 		context = {
 			modules: {}
 			labels: {}
@@ -105,7 +110,7 @@ loadSource = (filename, source, context, modname = '') ->
 		switch token.type
 			when 'label'
 				blameTokenInModule module, token, "redefinition of label '#{token.value}'" if context.labels[token.value]
-				context.labels[token.value] = "#{i}:#{module.name}"
+				context.labels[token.value] = mergeIP i, module.name
 			when 'import'
 				modname = token.value
 				context, err = loadSource "#{directory}#{modname}.bot", nil, context, modname
@@ -121,26 +126,21 @@ loadSource = (filename, source, context, modname = '') ->
 	
 	return context
 
-runContext = (context) ->
-	blameNoone "start label not found" unless context.labels.start
-	
-	state = {
-		:context
-		ip: context.labels.start
-		stack: {}
-		functionStack: {}
-		
+local contextMT
+contextMT = {
+	__index: {
+		clone: => setmetatable table.clone(@), contextMT
 		nextIP: =>
 			i, modname = splitIP @ip
 			@ip = "#{i + 1}:#{modname}"
 		getToken: (ip = @ip) =>
 			i, modname = splitIP ip
-			module = context.modules[modname]
+			module = @modules[modname]
 			assert module, "module '#{modname}' does not exist in the context"
 			token = module.tokens[i]
-			assert token, "token #{i} in module '#{modname}' does not exist"
+			return nil, "token #{i} in module '#{modname}' does not exist" unless token
 			return token
-		blame: (message) => blameState @, message
+		blame: (message) => blameRuntime @, message
 		popi: (i) =>
 			@blame "expected a value on the stack, got none" if #@stack < 1
 			value = @stack[i]
@@ -168,144 +168,182 @@ runContext = (context) ->
 					error "atempted to push a #{type value} value onto the stack", 2
 			table.insert @stack, i, tostring value
 		push: (value) => @pushi #@stack + 1, value
+		canReturn: => #@functionStack > 0
 		call: (ip) =>
 			@blame 'function stack overflow' if #@functionStack >= 1024
 			table.insert @functionStack, @ip
 			@ip = ip
-	}
-	
-	with state
-		while true
-			token = \getToken!
-			switch token.type
-				when 'literal'
-					\push token.value
-				when 'identifier'
-					-- Check for built-ins
-					switch token.value
-						when 'write'
-							value = \pop!
-							io.stdout\write value
-						when 'write-line'
-							value = \pop!
-							io.stdout\write value, '\n'
-						when 'ewrite'
-							value = \pop!
-							io.stderr\write value
-						when 'ewrite-line'
-							value = \pop!
-							io.stderr\write value, '\n'
-						when 'read-line'
-							\push io.stdin\read '*l'
-						when 'read-all'
-							\push io.stdin\read '*a'
-						when 'read-bytes'
-							count = \popnum!
-							\push io.stdin\read count
-						when 'stack-count'
-							\push #.stack
-						when 'store'
-							\pushi 1, \pop!
-						when 'load'
-							\push \popi 1
-						when 'swap'
-							a, b = unpack \popn 2
-							\push b
-							\push a
-						when 'dup'
-							value = \pop!
-							\push value
-							\push value
-						when 'dup2'
-							a, b = unpack \popn 2
-							\push a
-							\push b
-							\push a
-							\push b
-						when 'delete'
-							\pop!
-						when 'delete2'
-							\popn 2
-						when 'error'
-							\blame \pop!
-						when 'trace'
-							values = {}
-							for i, value in ipairs .stack
-								values[i] = string.format '%q', value
-							io.stderr\write "stack (#{#.stack}): ", table.concat(values, ', '), '\n'
-						when 'concat'
-							a, b = unpack \popn 2
-							\push a .. b
-						when 'length'
-							\push #\pop!
-						when '+'
-							b, a = \popnum!, \popnum!
-							\push a + b
-						when '-'
-							b, a = \popnum!, \popnum!
-							\push a - b
-						when '*'
-							b, a = \popnum!, \popnum!
-							\push a * b
-						when '**'
-							b, a = \popnum!, \popnum!
-							\push math.pow a, b
-						when '/'
-							b, a = \popnum!, \popnum!
-							\push a / b
-						when '//'
-							b, a = \popnum!, \popnum!
-							\push math.floor a / b
-						when '%'
-							b, a = \popnum!, \popnum!
-							\push a % b
-						when '++'
-							\push \popnum! + 1
-						when '--'
-							\push \popnum! - 1
-						when 'or'
-							b, a = \popbool!, \popbool!
-							\push a or b
-						when 'and'
-							b, a = \popbool!, \popbool!
-							\push a and b
-						when 'xor'
-							b, a = \popbool!, \popbool!
-							\push (a or b) and not (a and b)
-						when 'not'
-							\push not \popbool!
-						when 'call'
-							\call \popnum!
-						when 'address'
-							value = \pop!
-							value = .context.labels[value]
-							\blame 'no such label exists' unless value
-							\push value
-						when 'jump'
-							value = \popnum!
-							.ip = value
-							-- it's ok to not continue here and let the ip increment
-							-- since we would land on a label anyway, which would be a noop
-						when 'cond-jump'
-							address = \pop!
-							condition = \popbool!
-							.ip = address if condition
-						when 'return'
-							fslen = #.functionStack
-							\blame 'function stack already empty' if fslen == 0
-							.ip = .functionStack[fslen]
-							.functionStack[fslen] = nil
-						when 'exit'
-							break
-						else
+		execute: (symbol, repl = false) =>
+			with @ -- Due to earlier code
+				switch symbol
+					-- Check for built-ins first
+					when 'write'
+						value = \pop!
+						io.stdout\write value
+					when 'write-line'
+						value = \pop!
+						io.stdout\write value, '\n'
+					when 'ewrite'
+						value = \pop!
+						io.stderr\write value
+					when 'ewrite-line'
+						value = \pop!
+						io.stderr\write value, '\n'
+					when 'read-line'
+						\push io.stdin\read '*l'
+					when 'read-all'
+						\push io.stdin\read '*a'
+					when 'read-bytes'
+						count = \popnum!
+						\push io.stdin\read count
+					when 'stack-count'
+						\push #.stack
+					when 'store'
+						\pushi 1, \pop!
+					when 'load'
+						\push \popi 1
+					when 'swap'
+						a, b = unpack \popn 2
+						\push b
+						\push a
+					when 'dup'
+						value = \pop!
+						\push value
+						\push value
+					when 'dup2'
+						a, b = unpack \popn 2
+						\push a
+						\push b
+						\push a
+						\push b
+					when 'delete'
+						\pop!
+					when 'delete2'
+						\popn 2
+					when 'error'
+						\blame \pop!
+					when 'trace'
+						values = {}
+						for i, value in ipairs .stack
+							values[i] = string.format '%q', value
+						io.stderr\write "stack (#{#.stack}): ", table.concat(values, ', '), '\n'
+					when 'concat'
+						a, b = unpack \popn 2
+						\push a .. b
+					when 'length'
+						\push #\pop!
+					when '+'
+						b, a = \popnum!, \popnum!
+						\push a + b
+					when '-'
+						b, a = \popnum!, \popnum!
+						\push a - b
+					when '*'
+						b, a = \popnum!, \popnum!
+						\push a * b
+					when '**'
+						b, a = \popnum!, \popnum!
+						\push math.pow a, b
+					when '/'
+						b, a = \popnum!, \popnum!
+						\push a / b
+					when '//'
+						b, a = \popnum!, \popnum!
+						\push math.floor a / b
+					when '%'
+						b, a = \popnum!, \popnum!
+						\push a % b
+					when '++'
+						\push \popnum! + 1
+					when '--'
+						\push \popnum! - 1
+					when 'or'
+						b, a = \popbool!, \popbool!
+						\push a or b
+					when 'and'
+						b, a = \popbool!, \popbool!
+						\push a and b
+					when 'xor'
+						b, a = \popbool!, \popbool!
+						\push (a or b) and not (a and b)
+					when 'not'
+						\push not \popbool!
+					when 'call'
+						\call \popnum!
+					when 'address'
+						value = \pop!
+						value = .labels[value]
+						\blame 'no such label exists' unless value
+						\push value
+					when 'jump'
+						value = \popnum!
+						.ip = value
+						-- it's ok to not continue here and let the ip increment
+						-- since we would land on a label anyway, which would be a noop
+					when 'cond-jump'
+						address = \pop!
+						condition = \popbool!
+						.ip = address if condition
+					when 'return'
+						fslen = #.functionStack
+						\blame 'function stack already empty' if fslen == 0
+						.ip = .functionStack[fslen]
+						.functionStack[fslen] = nil
+					when 'exit'
+						os.exit!
+					else
+						replOK = true
+						if repl
+							-- REPL specific built-ins
+							switch symbol
+								when 'trace-on'
+									@trace = nil
+								when 'trace-off'
+									@trace = false
+								when 'help'
+									io.stderr\write "Help is not implemented yet. Sorry :(\n"
+								else
+									replOK = false
+						unless replOK
 							-- Check if label is defined
-							address = .context.labels[token.value]
+							address = .labels[symbol]
 							if address
 								\call address
 							else
 								\blame 'unrecognised symbol'
+	}
+}
+
+initializeRuntime = (context, startIP) ->
+	with context
+		.ip = startIP or .labels.start
+		blameNoone "start label not found" unless .ip
+		.stack = {}
+		.functionStack = {}
+	
+	setmetatable context, contextMT
+
+runContext = (context, startIP, repl) ->
+	context.ip = startIP if startIP
+	
+	with context
+		while true
+			token = \getToken!
+			unless token
+				if \canReturn!
+					\execute 'return', repl
+					\nextIP!
+					continue
+				else
+					break
+			switch token.type
+				when 'literal'
+					\push token.value
+				when 'identifier'
+					\execute token.value, repl
 			\nextIP!
-	return state.stack
+			
+	return context
 
 usage = ->
 	io.stderr\write "usage: #{arg[0]} run <source>\n"
@@ -317,17 +355,29 @@ switch arg[1] and arg[1]\lower!
 		usage! unless arg[2]
 		context, err = loadSource arg[2]
 		blameNoone err unless context
+		initializeRuntime context
 		runContext context
 	when 'repl'
-		io.stderr\write "Welcome to Botch #{version}\n"
 		id = 1
+		context = nil
+		io.stderr\write "Welcome to Botch #{version}\n"
 		while true
 			name = "repl-#{id}"
+			
 			io.stderr\write "(#{id}) $ "
 			io.stderr\flush!
+			
 			input = io.stdin\read '*l'
-			io.stderr\write 'REPL is not implemented yet\n'
-			io.stderr\flush!
+			newContext, err = loadSource nil, input, context, name
+			initializeRuntime newContext, mergeIP 1, name
+			if newContext
+				newContext.stack = context and table.icopy(context.stack) or newContext.stack
+				runContext newContext, nil, true
+				context = newContext
+				context\execute 'trace' if context.trace != false
+			else
+				io.stderr\write "#{err}\n"
+			
 			id += 1
 	else
 		usage!
