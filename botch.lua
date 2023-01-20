@@ -1,11 +1,11 @@
 local lithium = require('lithium.init')
 local string, table, lexer, io, util
 string, table, lexer, io, util = lithium.string, lithium.table, lithium.lexer, lithium.io, lithium.util
-local pack, unpack
-pack, unpack = table.pack, table.unpack
+local unpack
+unpack = table.unpack
 local major = 0
 local minor = 1
-local patch = 1
+local patch = 2
 local version = tostring(major) .. "." .. tostring(minor) .. "." .. tostring(patch)
 local splitIP
 splitIP = function(ip)
@@ -385,6 +385,21 @@ contextMT = {
           _with_0:push(_with_0:popnum() + 1)
         elseif '--' == _exp_0 then
           _with_0:push(_with_0:popnum() - 1)
+        elseif '<' == _exp_0 then
+          local b, a = _with_0:popnum(), _with_0:popnum()
+          _with_0:push(a < b)
+        elseif '>' == _exp_0 then
+          local b, a = _with_0:popnum(), _with_0:popnum()
+          _with_0:push(a > b)
+        elseif '<=' == _exp_0 then
+          local b, a = _with_0:popnum(), _with_0:popnum()
+          _with_0:push(a <= b)
+        elseif '>=' == _exp_0 then
+          local b, a = _with_0:popnum(), _with_0:popnum()
+          _with_0:push(a >= b)
+        elseif '=' == _exp_0 then
+          local a, b = unpack(_with_0:popn(2))
+          _with_0:push(a == b)
         elseif 'or' == _exp_0 then
           local b, a = _with_0:popbool(), _with_0:popbool()
           _with_0:push(a or b)
@@ -540,12 +555,14 @@ elseif 'repl' == _exp_0 then
         newContext.stack = context and table.icopy(context.stack) or newContext.stack
         runContext(newContext, nil, true)
         context = newContext
+        io.stdout:flush()
         if context.trace ~= false then
-          return context:execute('trace')
+          context:execute('trace')
         end
       else
-        return io.stderr:write(tostring(err) .. "\n")
+        io.stderr:write(tostring(err) .. "\n")
       end
+      return io.stderr:flush()
     end)
     while 'suspended' == coroutine.status(cor) do
       local err = getBotchError(cor, coroutine.resume(cor))

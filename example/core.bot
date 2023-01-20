@@ -12,3 +12,25 @@ assertion-ok:
 	load delete
 	# ...
 	return
+
+abs:
+	# ... n
+	dup 0 >=
+	# ... n -?
+	@abs-skip cond-jump
+	# ... -n
+	negate
+abs-skip:
+	# ... +n
+	return
+
+negate:
+	# ... n
+	0 swap -
+	# ... -n
+	return
+
+bool:
+	# ... ?
+	not not
+	# ... b

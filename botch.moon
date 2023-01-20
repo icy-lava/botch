@@ -2,11 +2,11 @@
 
 lithium = require 'lithium.init'
 import string, table, lexer, io, util from lithium
-import pack, unpack from table
+import unpack from table
 
 major = 0
 minor = 1
-patch = 1
+patch = 2
 version = "#{major}.#{minor}.#{patch}"
 
 splitIP = (ip) ->
@@ -281,6 +281,21 @@ contextMT = {
 						\push \popnum! + 1
 					when '--'
 						\push \popnum! - 1
+					when '<'
+						b, a = \popnum!, \popnum!
+						\push a < b
+					when '>'
+						b, a = \popnum!, \popnum!
+						\push a > b
+					when '<='
+						b, a = \popnum!, \popnum!
+						\push a <= b
+					when '>='
+						b, a = \popnum!, \popnum!
+						\push a >= b
+					when '='
+						a, b = unpack \popn 2
+						\push a == b
 					when 'or'
 						b, a = \popbool!, \popbool!
 						\push a or b
@@ -404,9 +419,11 @@ switch arg[1] and arg[1]\lower!
 					newContext.stack = context and table.icopy(context.stack) or newContext.stack
 					runContext newContext, nil, true
 					context = newContext
+					io.stdout\flush!
 					context\execute 'trace' if context.trace != false
 				else
 					io.stderr\write "#{err}\n"
+				io.stderr\flush!
 			
 			while 'suspended' == coroutine.status cor
 				err = getBotchError cor, coroutine.resume cor
