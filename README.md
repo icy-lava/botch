@@ -24,8 +24,8 @@ The examples folder has some programs written, but here's some code.
 ```shell
 # Print "Hello world!"
 start:
-	"Hello world" write-line
-	exit # It is neccesary to exit, otherwise we'll crash :)
+    "Hello world" write-line
+    exit # It is neccesary to exit, otherwise we'll crash :)
 ```
 
 1. Everything from the `#` symbol to the end of the line is a comment, it will not be executed.
@@ -39,17 +39,17 @@ start:
 ```shell
 # Print numbers 1 through 10
 start:
-	0 10
+    0 10
 start-loop:
-	# i n
-	swap
-	# n i
-	++ dup write-line
-	swap -- dup
-	# i n-1
-	@start-loop cond-jump
-	# i 0
-	exit
+    # i n
+    swap
+    # n i
+    ++ dup write-line
+    swap -- dup
+    # i n-1
+    @start-loop cond-jump
+    # i 0
+    exit
 ```
 
 1. We first push the numbers 1 and 10 onto the stack. 10 is the second number pushed, so it is on top of the stack.
@@ -64,16 +64,16 @@ start-loop:
 
 ```shell
 start:
-	1 2 3
-	trace # stack (3): "1", "2", "3"
-	
-	store
-	trace # stack (3): "3", "1", "2"
-	
-	load
-	trace # stack (3): "1", "2", "3"
-	
-	exit
+    1 2 3
+    trace # stack (3): "1", "2", "3"
+    
+    store
+    trace # stack (3): "3", "1", "2"
+    
+    load
+    trace # stack (3): "1", "2", "3"
+    
+    exit
 ```
 
 #### Define and call a function
@@ -82,16 +82,16 @@ start:
 # Defining and calling a function
 
 say-hello:
-	# ... str
-	"Hello " swap concat
-	# ... str
-	"!" concat write-line
-	# ...
-	return # If we don't return, we'll execute start again
+    # ... str
+    "Hello " swap concat
+    # ... str
+    "!" concat write-line
+    # ...
+    return # If we don't return, we'll execute start again
 
 start:
-	"world" say-hello
-	exit
+    "world" say-hello
+    exit
 ```
 
 ## Learning
