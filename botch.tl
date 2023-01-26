@@ -1,13 +1,12 @@
-(require as function) 'moonscript'
-require 'tl'.loader()
- 
+-- require 'tl'.loader()
+
 local lithium = require('lithium.init')
 local stringx, tablex, lexer, iox = lithium.stringx, lithium.tablex, lithium.lexer, lithium.iox
 local unpack = table.unpack
 
 local major = 0
-local minor = 1
-local patch = 4
+local minor = 2
+local patch = 0
 local version = tostring(major) .. "." .. tostring(minor) .. "." .. tostring(patch)
 
 local type common = require 'lithium.common'
