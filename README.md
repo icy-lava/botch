@@ -1,18 +1,20 @@
 # Botch
 
-Botch is a stack based concatenative programming language. It's end goal is to be compiled to Batch. It currently has an interpreter written in MoonScript.
+Botch is a stack based concatenative programming language. It's end goal is to be compiled to Batch. It currently has an interpreter written in Teal (a typed dialect of Lua).
 
 ## Usage
 
-You'll need `lua`, `luajit` or `moon` (MoonScript) in your system path.
+First you'll need the Teal compiler. You can install it using `luarocks install tl` or by downloading `tl.lua` from [this repo](https://github.com/teal-language/tl) (you'll need to run it using Lua like `lua tl.lua run botch.tl ...`).
 
+Then you'll need to clone this git repo:
 ```shell
 git clone --recurse-submodules https://github.com/icy-lava/botch.git
 cd botch
 
-lua botch.lua run example/hello.bot
-# Or, if you have moonscript in your system path
-moon botch.moon run example/hello.bot
+# Run an example script
+tl run botch.tl run example/hello.bot
+# Run the Read Evaluate Print Loop (REPL)
+tl run botch.tl repl
 ```
 
 ## Examples
@@ -25,7 +27,10 @@ The examples folder has some programs written, but here's some code.
 # Print "Hello world!"
 start:
     "Hello world" write-line
-    exit # It is neccesary to exit, otherwise we'll crash :)
+    
+    # When we reach the end of file, there's an automatic return which will end execution,
+    # however, it is good practice to explicitly exit like this:
+    exit
 ```
 
 1. Everything from the `#` symbol to the end of the line is a comment, it will not be executed.
@@ -33,6 +38,12 @@ start:
 3. The execution will then advance to `"Hello world"`, this literal will be pushed onto the stack as a string (all values in Botch are strings).
 4. Then the `write-line` built-in function will be called, this function will consume the string on the stack and write it to standard output.
 5. Finally, the `exit` built-in will terminate the program.
+
+It's important to note that botch doesn't care about whitespace, except when dealing with line comments, dealing with strings, and to seperate the symbols. This is the same program written in 1 line:
+
+```shell
+start: "Hello world" write-line exit
+```
 
 #### Counting:
 
@@ -59,6 +70,12 @@ start-loop:
 5. We swap the values again, now 10 is on top again. We decrement it by one, now we have a 9. We duplicate this 9.
 6. An identifier that starts with an `@` (in this case `@start-loop`) is an address that gets pushed onto the stack. This can be used by a jump instruction to move execution of the program to the position of that label. After the address is pushed onto the stack, we do a conditional jump, which jumps to an address only if the second value from the top of the stack is not 0.
 7. Since we have a 9 a the condition, we jump back to the start-loop label. We repeat that process (except for pushing the 0 and 10 values) until we have a 0 in that spot in the program, at which point we will pass the label and exit the program.
+
+Just to bring home the previous remark about whitespace, here's the same program in 1 line:
+
+```shell
+start: 0 10 start-loop: swap ++ dup write-line swap -- dup @start-loop cond-jump exit
+```
 
 #### `store`, `load`, `trace`
 
@@ -90,10 +107,10 @@ say-hello:
     return # If we don't return, we'll execute start again
 
 start:
-    "world" say-hello
+    "world" say-hello # Writes "Hello world!"
     exit
 ```
 
 ## Learning
 
-To learn what built-ins are available to you, take a look at `botch.moon`.
+To learn what built-ins are available to you, take a look at `botch.tl`.
