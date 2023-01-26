@@ -1,3 +1,3 @@
 .PHONY: run
 run:
-	tl run botch.lua repl
+	tl run botch.tl repl

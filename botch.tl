@@ -7,10 +7,22 @@ local unpack = table.unpack
 
 local major = 0
 local minor = 1
-local patch = 3
+local patch = 4
 local version = tostring(major) .. "." .. tostring(minor) .. "." .. tostring(patch)
 
-local type Token = lexer.Token
+local type common = require 'lithium.common'
+local type Packed = common.Packed
+
+local type Token = record
+	-- From lithium.lexer
+	type: string
+	start: integer
+	stop: integer
+	match: string
+	captures: Packed<string>
+	-- Additional fields
+	value: string
+end
 
 local type IP = string
 
@@ -108,11 +120,6 @@ local function blameNoone(message: string)
 	botchError(message)
 end
 
-local function blameModule(module: Module, message: string)
-	io.stderr:write(tostring(module.filename or module.name) .. ": error: " .. tostring(message) .. "\n")
-	botchError(message)
-end
-
 local function blameByteInModule(module: Module, i: integer, message: string)
 	local line, col = stringx.positionAt(module.source, i)
 	io.stderr:write(tostring(module.filename or module.name) .. ":" .. tostring(line) .. ":" .. tostring(col) .. ": error: " .. tostring(message) .. "\n")
@@ -127,27 +134,6 @@ local function blameTokenInModule(module: Module, token: Token | integer, messag
 		tokenObj = token
 	end
 	blameByteInModule(module, tokenObj.start, message)
-end
-
-local function blameRuntime(context: Context, message: string)
-	if not (context.stack and context.functionStack) then
-		error('runtime not initialized')
-	end
-	io.stderr:write(tostring((getLocationString(context))) .. ": error: " .. tostring(message) .. "\n")
-	local fslen = #context.functionStack
-	local to = math.max(1, fslen - 5 + 1)
-	for i = fslen, to, -1 do
-		if i == to then
-			if i > 1 then
-				io.stderr:write('    ...\n')
-			end
-			i = 1
-		end
-		local ip = context.functionStack[i]
-		local location, token = getLocationString(context, ip)
-		io.stderr:write("    at " .. tostring(location) .. " in " .. tostring(token) .. "\n")
-	end
-	botchError(message)
 end
 
 local function loadSource(filename: string, source: string, context: Context, modname: string): Context, string
@@ -185,8 +171,8 @@ local function loadSource(filename: string, source: string, context: Context, mo
 	}
 	
 	context.modules[modname] = module
-	local _, errByte: string, integer
-	module.tokens, _, errByte = lexer.lexString(source, {
+	local tokens, _, errByte: {lexer.Token}, string, integer
+	tokens, _, errByte = lexer.lexString(source, {
 		{'whitespace','%s+'},
 		{'literal','"([^"]*)"',"'([^']*)'",'%d+'},
 		{'import',':([%w%-_/%.]+)'},
@@ -195,6 +181,8 @@ local function loadSource(filename: string, source: string, context: Context, mo
 		{'comment','#[^\n]*'},
 		{'identifier','[^%c%s@:]+'}
 	})
+	
+	module.tokens = tokens as {Token} -- NOTE: sus
 	
 	if not (module.tokens) then
 		blameByteInModule(module, errByte, 'unrecognized token')
@@ -230,7 +218,7 @@ local function loadSource(filename: string, source: string, context: Context, mo
 		end
 	end
 	
-	for i, token in ipairs(module.tokens) do
+	for _, token in ipairs(module.tokens) do
 		if token.type == 'address' then
 			if not (context.labels[token.value]) then
 				blameTokenInModule(module, token, 'no such label exists')
@@ -282,7 +270,24 @@ function Context:getToken(ip: IP): Token, string
 end
 
 function Context:blame(message: string)
-	blameRuntime(self, message)
+	if not (self.stack and self.functionStack) then
+		error('runtime not initialized')
+	end
+	io.stderr:write(tostring((getLocationString(self))) .. ": error: " .. tostring(message) .. "\n")
+	local fslen = #self.functionStack
+	local to = math.max(1, fslen - 5 + 1)
+	for i = fslen, to, -1 do
+		if i == to then
+			if i > 1 then
+				io.stderr:write('    ...\n')
+			end
+			i = 1
+		end
+		local ip = self.functionStack[i]
+		local location, token = getLocationString(self, ip)
+		io.stderr:write("    at " .. tostring(location) .. " in " .. tostring(token) .. "\n")
+	end
+	botchError(message)
 end
 
 function Context:popi(i: integer): string
@@ -364,13 +369,16 @@ function Context:execute(symbol: string, repl: boolean)
 		io.stderr:write(value, '\n')
 	elseif 'read-line' == symbol then
 		local line, err = io.stdin:read('*l')
+		self:blame(err)
 		self:push(line)
 	elseif 'read-all' == symbol then
 		local all, err = io.stdin:read('*a')
+		self:blame(err)
 		self:push(all)
 	elseif 'read-bytes' == symbol then
 		local count = self:popnum()
 		local bytes, err = io.stdin:read(count)
+		self:blame(err)
 		self:push(bytes)
 	elseif 'stack-count' == symbol then
 		self:push(#self.stack)
@@ -516,33 +524,31 @@ function Context:run(startIP: IP, repl: boolean)
 	if startIP then
 		self.ip = startIP
 	end
-	do
-		while true do
-			local _continue_0 = false
-			repeat
-				local token = self:getToken()
-				if not (token) then
-					if self:canReturn() then
-						self:execute('return', repl)
-						self:nextIP()
-						_continue_0 = true
-						break
-					else
-						break
-					end
+	while true do
+		local _continue_0 = false
+		repeat
+			local token = self:getToken()
+			if not (token) then
+				if self:canReturn() then
+					self:execute('return', repl)
+					self:nextIP()
+					_continue_0 = true
+					break
+				else
+					break
 				end
-				local typ = token.type
-				if 'literal' == typ then
-					self:push(token.value)
-				elseif 'identifier' == typ then
-					self:execute(token.value, repl)
-				end
-				self:nextIP()
-				_continue_0 = true
-			until true
-			if not _continue_0 then
-				break
 			end
+			local typ = token.type
+			if 'literal' == typ then
+				self:push(token.value)
+			elseif 'identifier' == typ then
+				self:execute(token.value, repl)
+			end
+			self:nextIP()
+			_continue_0 = true
+		until true
+		if not _continue_0 then
+			break
 		end
 	end
 end
@@ -558,7 +564,7 @@ end
 
 local command = arg[1] and arg[1]:lower()
 if 'run' == command then
-	if not (arg[2]) then
+	if not arg[2] then
 		usage()
 	end
 	local cor = coroutine.create(function()
