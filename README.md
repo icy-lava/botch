@@ -1,5 +1,7 @@
 # Botch
 
+![Botch Demo](demo.gif)
+
 Botch is a stack based concatenative programming language. It's end goal is to be compiled to Batch. It currently has an interpreter written in Teal (a typed dialect of Lua).
 
 ## Usage
