@@ -368,16 +368,22 @@ function Context:execute(symbol: string, repl: boolean)
 		io.stderr:write(value, '\n')
 	elseif 'read-line' == symbol then
 		local line, err = io.stdin:read('*l')
-		self:blame(err)
+		if not line then
+			self:blame(err)
+		end
 		self:push(line)
 	elseif 'read-all' == symbol then
 		local all, err = io.stdin:read('*a')
-		self:blame(err)
+		if not all then
+			self:blame(err)
+		end
 		self:push(all)
 	elseif 'read-bytes' == symbol then
 		local count = self:popnum()
 		local bytes, err = io.stdin:read(count)
-		self:blame(err)
+		if not bytes then
+			self:blame(err)
+		end
 		self:push(bytes)
 	elseif 'stack-count' == symbol then
 		self:push(#self.stack)
