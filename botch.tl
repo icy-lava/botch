@@ -1,6 +1,5 @@
 -- require 'tl'.loader()
 
-local inpsect = require 'inspect'
 local lithium = require('lithium.init')
 local stringx, tablex, lexer, iox = lithium.stringx, lithium.tablex, lithium.lexer, lithium.iox
 local unpack = table.unpack
