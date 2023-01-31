@@ -6,7 +6,7 @@ Botch is a stack based concatenative programming language. It's end goal is to b
 
 ## Usage
 
-First you'll need the Teal compiler. You can install it using `luarocks install tl` or by downloading `tl.lua` from [this repo](https://github.com/teal-language/tl) (you'll need to run it using Lua like `lua tl.lua run botch.tl ...`).
+First you'll need the Teal compiler. You can install it using `luarocks install tl`.
 
 Then you'll need to clone this git repo:
 ```shell
