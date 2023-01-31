@@ -5,8 +5,8 @@ local stringx, tablex, lexer, iox = lithium.stringx, lithium.tablex, lithium.lex
 local unpack = table.unpack
 
 local major = 0
-local minor = 2
-local patch = 1
+local minor = 3
+local patch = 0
 local version = tostring(major) .. "." .. tostring(minor) .. "." .. tostring(patch)
 
 local type common = require 'lithium.common'
@@ -32,13 +32,19 @@ local record Module
 	tokens: {Token}
 end
 
+-- local type BotchStack = {string | BotchStack}
+local type BotchValue = string | {BotchValue}
+local type LuaStack = {string | boolean | number | LuaStack}
+local type LuaValue = string | boolean | number | LuaStack
+
 local record Context
 	ip: IP
 	labels: {string:IP}
 	modules: {string:Module}
 	
 	-- Runtime
-	stack: {string}
+	stack: {BotchValue}
+	stacks: {{BotchValue}}
 	functionStack: {IP}
 	
 	-- REPL
@@ -48,6 +54,59 @@ local record Context
 	clone: function(self: Context): Context
 	-- FIXME: this will not fail with colon syntax even though it's a mistake
 	new: function(t: Context): Context
+end
+
+local function luaValueToBotch(value: LuaValue): string | {BotchValue}
+	if value is string then
+		return value
+	elseif value is boolean then
+		return value and '1' or '0'
+	elseif value is number then
+		return tostring(value)
+	elseif value is LuaStack then
+		local newStack: {BotchValue} = {}
+		for i, v in ipairs(value) do
+			newStack[i] = luaValueToBotch(v)
+		end
+		return newStack
+	end
+	error('don\'t know how to convert value ' .. tostring(value))
+end
+
+local function botchValueToLua(value: BotchValue): LuaValue
+	if value is string then
+		local num = tonumber(value)
+		if not num then
+			return value
+		end
+		return num
+	else
+		local newStack: LuaStack = {}
+		for i, v in ipairs(value) do
+			-- NOTE: sus
+			newStack[i] = botchValueToLua(v) as (string | boolean | number | LuaStack)
+		end
+		return newStack
+	end
+	error('don\'t know how to convert value ' .. tostring(value))
+end
+
+local function stringifyLuaValue(value: LuaValue): string
+	if value is string then
+		return string.format('%q', value)
+	elseif value is number then
+		return tostring(value)
+	elseif value is boolean then
+		return tostring(value)
+	elseif value is LuaStack then
+		local stack: LuaStack = value
+		local arr: {string} = {}
+		for i = 1, #stack do
+			arr[i] = stringifyLuaValue(stack[i])
+		end
+		return '{' .. table.concat(arr, ' ') .. '}'
+	end
+	error('don\'t know how to stringify value ' .. tostring(value))
 end
 
 local function splitIP(ip: IP): integer, string
@@ -246,6 +305,7 @@ function Context:initializeRuntime(startIP: IP)
 		blameNoone("start label not found")
 	end
 	self.stack = {}
+	self.stacks = {}
 	self.functionStack = {}
 end
 
@@ -289,27 +349,65 @@ function Context:blame(message: string)
 	botchError(message)
 end
 
-function Context:popi(i: integer): string
+function Context:poprawi(i: integer): BotchValue
 	if #self.stack < 1 then
 		self:blame("expected a value on the stack, got none")
 	end
 	local value = self.stack[i]
-	if not (value) then
+	if not value then
 		error("invalid stack index " .. tostring(i))
 	end
 	table.remove(self.stack, i)
 	return value
 end
 
-function Context:pop(): string
+function Context:popraw(): BotchValue
+	return self:poprawi(#self.stack)
+end
+
+function Context:popstri(i: integer): string
+	local value = self:poprawi(i)
+	if value is string then
+		return value
+	end
+	self:blame("expected a string value on the stack")
+end
+
+function Context:popstr(): string
+	return self:popstri(#self.stack)
+end
+
+function Context:popaddr(): IP
+	local value = self:popraw()
+	if value is string then
+		if splitIP(value) then
+			return value
+		end
+	end
+	self:blame("expected an address on the stack")
+end
+
+function Context:popi(i: integer): LuaValue
+	return botchValueToLua(self:poprawi(i))
+end
+
+function Context:pop(): LuaValue
 	return self:popi(#self.stack)
 end
 
-function Context:popn(n: integer): {string}
+function Context:popstack(): {BotchValue}
+	local value = self:popraw()
+	if value is {BotchValue} then
+		return value
+	end
+	self:blame("expected a stack on the stack")
+end
+
+function Context:popn(n: integer): {LuaValue}
 	if #self.stack < n then
 		self:blame("expected at least " .. tostring(n) .. " values on the stack, got " .. tostring(#self.stack))
 	end
-	local values: {string} = {}
+	local values: {LuaValue} = {}
 	for i = n, 1, -1 do
 		values[i] = self:pop()
 	end
@@ -317,25 +415,33 @@ function Context:popn(n: integer): {string}
 end
 
 function Context:popnum(): number
-	local value = tonumber(self:pop())
-	if not value then
+	local value = self:pop()
+	if value is number then
+		return value
+	else
 		self:blame('expected a number as argument')
 	end
-	return value
 end
 
 function Context:popbool(): boolean
-	return self:pop() ~= '0'
+	local value = self:popnum()
+	return value ~= 0
 end
 
-function Context:pushi(i: integer, value: string | boolean | number)
-	if value is boolean then
-		value = value and '1' or '0'
-	end
-	table.insert(self.stack, i, tostring(value))
+function Context:pushrawi(i: integer, value: BotchValue)
+	table.insert(self.stack, i, value)
 end
 
-function Context:push(value: string | boolean | number)
+function Context:pushraw(value: BotchValue)
+	self:pushrawi(#self.stack + 1, value)
+end
+
+function Context:pushi(i: integer, value: LuaValue)
+	local botchValue = luaValueToBotch(value)
+	table.insert(self.stack, i, botchValue)
+end
+
+function Context:push(value: LuaValue)
 	self:pushi(#self.stack + 1, value)
 end
 
@@ -354,18 +460,33 @@ end
 function Context:execute(symbol: string, repl: boolean)
 	if repl == nil then repl = false end
 	
-	if 'write' == symbol then
+	if 'new-stack' == symbol then
+		self:push({})
+	elseif 'enter' == symbol then
+		-- FIXME: ideally we want a peek function and a type checking helper
+		local stack = self:popstack()
+		self:pushraw(stack)
+		
+		table.insert(self.stacks, self.stack)
+		self.stack = stack
+	elseif 'leave' == symbol then
+		local stack = self.stacks[#self.stacks]
+		-- FIXME: this is a botch error, not a lua error
+		assert(stack, 'stack is empty')
+		self.stacks[#self.stacks] = nil
+		self.stack = stack
+	elseif 'write' == symbol then
 		local value = self:pop()
-		io.stdout:write(value)
+		io.stdout:write(stringifyLuaValue(value))
 	elseif 'write-line' == symbol then
 		local value = self:pop()
-		io.stdout:write(value, '\n')
+		io.stdout:write(stringifyLuaValue(value), '\n')
 	elseif 'ewrite' == symbol then
 		local value = self:pop()
-		io.stderr:write(value)
+		io.stderr:write(stringifyLuaValue(value))
 	elseif 'ewrite-line' == symbol then
 		local value = self:pop()
-		io.stderr:write(value, '\n')
+		io.stderr:write(stringifyLuaValue(value), '\n')
 	elseif 'read-line' == symbol then
 		local line, err = io.stdin:read('*l')
 		if not line then
@@ -397,6 +518,7 @@ function Context:execute(symbol: string, repl: boolean)
 		self:push(a)
 	elseif 'dup' == symbol then
 		local value = self:pop()
+		-- FIXME: if it's a stack we want to clone it
 		self:push(value)
 		self:push(value)
 	elseif 'dup2' == symbol then
@@ -410,18 +532,29 @@ function Context:execute(symbol: string, repl: boolean)
 	elseif 'delete2' == symbol then
 		self:popn(2)
 	elseif 'error' == symbol then
-		self:blame(self:pop())
+		local value = self:pop()
+		if value is string then
+			self:blame(value)
+		else
+			self:blame(stringifyLuaValue(value))
+		end
 	elseif 'trace' == symbol then
 		local values = {}
 		for i, value in ipairs(self.stack) do
-			values[i] = string.format('%q', value)
+			values[i] = stringifyLuaValue(botchValueToLua(value))
 		end
-		io.stderr:write("stack (" .. tostring(#self.stack) .. "): ", table.concat(values, ', '), '\n')
+		io.stderr:write("stack (" .. tostring(#self.stack) .. "): ", table.concat(values, ' '), '\n')
 	elseif 'concat' == symbol then
-		local a, b = unpack(self:popn(2))
+		local b = self:popstr()
+		local a = self:popstr()
 		self:push(a .. b)
 	elseif 'length' == symbol then
-		self:push(#self:pop())
+		local value = self:popraw()
+		if value is string then
+			self:push(#value)
+		else
+			self:push(#value)
+		end
 	elseif '+' == symbol then
 		local b, a = self:popnum(), self:popnum()
 		self:push(a + b)
@@ -435,9 +568,6 @@ function Context:execute(symbol: string, repl: boolean)
 		local b, a = self:popnum(), self:popnum()
 		self:push(math.pow(a, b))
 	elseif '/' == symbol then
-		local b, a = self:popnum(), self:popnum()
-		self:push(a / b)
-	elseif '//' == symbol then
 		local b, a = self:popnum(), self:popnum()
 		self:push(math.floor(a / b))
 	elseif '%' == symbol then
@@ -474,20 +604,20 @@ function Context:execute(symbol: string, repl: boolean)
 	elseif 'not' == symbol then
 		self:push(not self:popbool())
 	elseif 'call' == symbol then
-		local address = self:pop()
+		local address = self:popaddr()
 		self:call(address)
 	elseif 'address' == symbol then
-		local value = self:pop()
+		local value = self:popstr()
 		local address = self.labels[value]
 		if not address then
 			self:blame('no such label exists')
 		end
 		self:push(address)
 	elseif 'jump' == symbol then
-		local address = self:pop()
+		local address = self:popaddr()
 		self.ip = address
 	elseif 'cond-jump' == symbol then
-		local address = self:pop()
+		local address = self:popaddr()
 		local condition = self:popbool()
 		if condition then
 			self.ip = address
@@ -502,7 +632,7 @@ function Context:execute(symbol: string, repl: boolean)
 	elseif 'exit' == symbol then
 		os.exit()
 	else
-		local replOK : boolean = repl
+		local replOK: boolean = repl
 		if repl then
 			if 'trace-on' == symbol then
 				self.trace = nil
@@ -514,7 +644,7 @@ function Context:execute(symbol: string, repl: boolean)
 				replOK = false
 			end
 		end
-		if not (replOK) then
+		if not replOK then
 			local address = self.labels[symbol]
 			if address then
 				self:call(address)
@@ -600,6 +730,7 @@ elseif 'repl' == command then
 			newContext:initializeRuntime(mergeIP(1, name))
 			if newContext then
 				newContext.stack = context and tablex.icopy(context.stack) or newContext.stack
+				newContext.stacks = context and tablex.clone(context.stacks) or newContext.stacks
 				newContext:run(nil, true)
 				context = newContext
 				io.stdout:flush()
