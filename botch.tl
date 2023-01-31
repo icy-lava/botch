@@ -1,12 +1,13 @@
 -- require 'tl'.loader()
 
+local inpsect = require 'inspect'
 local lithium = require('lithium.init')
 local stringx, tablex, lexer, iox = lithium.stringx, lithium.tablex, lithium.lexer, lithium.iox
 local unpack = table.unpack
 
 local major = 0
 local minor = 3
-local patch = 0
+local patch = 1
 local version = tostring(major) .. "." .. tostring(minor) .. "." .. tostring(patch)
 
 local type common = require 'lithium.common'
@@ -727,10 +728,44 @@ elseif 'repl' == command then
 		local input = assert(io.stdin:read('*l'))
 		local cor = coroutine.create(function()
 			local newContext, err = loadSource(nil, input, context, name)
-			newContext:initializeRuntime(mergeIP(1, name))
 			if newContext then
-				newContext.stack = context and tablex.icopy(context.stack) or newContext.stack
-				newContext.stacks = context and tablex.clone(context.stacks) or newContext.stacks
+				newContext:initializeRuntime(mergeIP(1, name))
+				
+				local stacks: {{BotchValue}}
+				if context then
+					stacks = tablex.imerge(context.stacks, {context.stack}) as {{BotchValue}}
+					
+					-- print(#newContext.stacks)
+					-- local references: {{BotchValue}:boolean} = {}
+					-- for _, stack in ipairs(stacks) do
+					-- 	references[stack] = true
+					-- end
+					
+					local newReferences: {{BotchValue}:{BotchValue}} = {}
+					local function cloneStack(stack: {BotchValue}): {BotchValue}
+						if not newReferences[stack] then
+							local newStack: {BotchValue} = {}
+							newReferences[stack] = newStack
+							for i, v in ipairs(stack) do
+								if v is {BotchValue} then
+									newStack[i] = cloneStack(v)
+								else
+									newStack[i] = v
+								end
+							end
+						end
+						return newReferences[stack]
+					end
+					
+					for i, stack in ipairs(stacks) do
+						stacks[i] = cloneStack(stack)
+					end
+					
+					newContext.stack = stacks[#stacks]
+					stacks[#stacks] = nil
+					newContext.stacks = stacks
+				end
+				
 				newContext:run(nil, true)
 				context = newContext
 				io.stdout:flush()
