@@ -5,8 +5,8 @@ local stringx, tablex, lexer, iox = lithium.stringx, lithium.tablex, lithium.lex
 local unpack = table.unpack
 
 local major = 0
-local minor = 3
-local patch = 1
+local minor = 4
+local patch = 0
 local version = tostring(major) .. "." .. tostring(minor) .. "." .. tostring(patch)
 
 local type common = require 'lithium.common'
@@ -32,8 +32,8 @@ local record Module
 	tokens: {Token}
 end
 
--- local type BotchStack = {string | BotchStack}
-local type BotchValue = string | {BotchValue}
+local type BotchValue = string | BotchStack
+local type BotchStack = {BotchValue}
 local type LuaStack = {string | boolean | number | LuaStack}
 local type LuaValue = string | boolean | number | LuaStack
 
@@ -43,8 +43,8 @@ local record Context
 	modules: {string:Module}
 	
 	-- Runtime
-	stack: {BotchValue}
-	stacks: {{BotchValue}}
+	stack: BotchStack
+	stacks: {BotchStack}
 	functionStack: {IP}
 	
 	-- REPL
@@ -56,7 +56,7 @@ local record Context
 	new: function(t: Context): Context
 end
 
-local function luaValueToBotch(value: LuaValue): string | {BotchValue}
+local function luaValueToBotch(value: LuaValue): BotchValue
 	if value is string then
 		return value
 	elseif value is boolean then
@@ -64,7 +64,7 @@ local function luaValueToBotch(value: LuaValue): string | {BotchValue}
 	elseif value is number then
 		return tostring(value)
 	elseif value is LuaStack then
-		local newStack: {BotchValue} = {}
+		local newStack: BotchStack = {}
 		for i, v in ipairs(value) do
 			newStack[i] = luaValueToBotch(v)
 		end
@@ -395,9 +395,9 @@ function Context:pop(): LuaValue
 	return self:popi(#self.stack)
 end
 
-function Context:popstack(): {BotchValue}
+function Context:popstack(): BotchStack
 	local value = self:popraw()
-	if value is {BotchValue} then
+	if value is BotchStack then
 		return value
 	end
 	self:blame("expected a stack on the stack")
@@ -470,13 +470,26 @@ function Context:execute(symbol: string, repl: boolean)
 		table.insert(self.stacks, self.stack)
 		self.stack = stack
 	elseif 'leave' == symbol then
-		local stack = self.stacks[#self.stacks]
-		-- FIXME: this is a botch error, not a lua error
-		assert(stack, 'stack is empty')
-		self.stacks[#self.stacks] = nil
-		self.stack = stack
+		if #self.stacks == 0 then
+			self:blame('can not leave stack, already at the top')
+		end
+		self.stack = table.remove(self.stacks, #self.stacks)
+	elseif 'push' == symbol then
+		local value = self:popraw()
+		local stack = self:popstack()
+		table.insert(stack, value)
+		self:pushraw(stack)
+	elseif 'pull' == symbol then
+		local stack = self:popstack()
+		if #stack == 0 then
+			self:blame('substack is empty')
+		end
+		local value = table.remove(stack, #stack)
+		self:pushraw(stack)
+		self:pushraw(value)
 	elseif 'write' == symbol then
 		local value = self:pop()
+		-- FIXME: stringify quotes string values
 		io.stdout:write(stringifyLuaValue(value))
 	elseif 'write-line' == symbol then
 		local value = self:pop()
@@ -730,23 +743,23 @@ elseif 'repl' == command then
 			if newContext then
 				newContext:initializeRuntime(mergeIP(1, name))
 				
-				local stacks: {{BotchValue}}
+				local stacks: {BotchStack}
 				if context then
-					stacks = tablex.imerge(context.stacks, {context.stack}) as {{BotchValue}}
+					stacks = tablex.imerge(context.stacks, {context.stack}) as {BotchStack}
 					
 					-- print(#newContext.stacks)
-					-- local references: {{BotchValue}:boolean} = {}
+					-- local references: {BotchStack:boolean} = {}
 					-- for _, stack in ipairs(stacks) do
 					-- 	references[stack] = true
 					-- end
 					
-					local newReferences: {{BotchValue}:{BotchValue}} = {}
-					local function cloneStack(stack: {BotchValue}): {BotchValue}
+					local newReferences: {BotchStack:BotchStack} = {}
+					local function cloneStack(stack: BotchStack): BotchStack
 						if not newReferences[stack] then
-							local newStack: {BotchValue} = {}
+							local newStack: BotchStack = {}
 							newReferences[stack] = newStack
 							for i, v in ipairs(stack) do
-								if v is {BotchValue} then
+								if v is BotchStack then
 									newStack[i] = cloneStack(v)
 								else
 									newStack[i] = v
