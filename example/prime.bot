@@ -1,0 +1,40 @@
+is-prime:
+	# ... n
+	new-stack swap push enter
+	# n
+	1
+is-prime-loop:
+	# n div
+	++
+	dup2 -
+	@is-prime-unequal cond-jump
+	leave delete
+	1 return
+is-prime-unequal:
+	# n div
+	dup2 %
+	@is-prime-loop cond-jump
+	leave delete
+	0
+	return
+
+start:
+	new-stack 1
+start-loop:
+	# ... {} i
+	++
+	dup is-prime not
+	@start-loop cond-jump
+	# ... {} p
+	dup store push load
+	# ... {p} i
+	store dup length
+	# i ... {p} len
+	16 -
+	# i ... {p} cond
+	load swap
+	# ... {p} i cond
+	@start-loop cond-jump
+	# ... {p} i
+	delete write-line
+	exit
