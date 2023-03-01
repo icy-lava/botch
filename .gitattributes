@@ -1,0 +1,3 @@
+*.tl linguist-language=lua linguist-detectable
+*.d.tl linguist-documentation
+*.bot linguist-language=shell linguist-documentation
